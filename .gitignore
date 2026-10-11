@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# env files (only the .example templates are committed)
+.env
+apps/*/.env
+
+.idea/
+.vscode/
+*.log

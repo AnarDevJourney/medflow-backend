@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "collection": "@nestjs/schematics",
+  "monorepo": true,
+  "root": "apps/api-gateway",
+  "sourceRoot": "apps/api-gateway/src",
+  "compilerOptions": {
+    "builder": "tsc",
+    "deleteOutDir": true,
+    "tsConfigPath": "apps/api-gateway/tsconfig.app.json"
+  },
+  "projects": {
+    "api-gateway": {
+      "type": "application",
+      "root": "apps/api-gateway",
+      "entryFile": "main",
+      "sourceRoot": "apps/api-gateway/src",
+      "compilerOptions": { "tsConfigPath": "apps/api-gateway/tsconfig.app.json" }
+    },
+    "auth-service": {
+      "type": "application",
+      "root": "apps/auth-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/auth-service/src",
+      "compilerOptions": { "tsConfigPath": "apps/auth-service/tsconfig.app.json" }
+    },
+    "staff-service": {
+      "type": "application",
+      "root": "apps/staff-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/staff-service/src",
+      "compilerOptions": { "tsConfigPath": "apps/staff-service/tsconfig.app.json" }
+    },
+    "patient-service": {
+      "type": "application",
+      "root": "apps/patient-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/patient-service/src",
+      "compilerOptions": { "tsConfigPath": "apps/patient-service/tsconfig.app.json" }
+    },
+    "appointment-service": {
+      "type": "application",
+      "root": "apps/appointment-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/appointment-service/src",
+      "compilerOptions": { "tsConfigPath": "apps/appointment-service/tsconfig.app.json" }
+    },
+    "medical-record-service": {
+      "type": "application",
+      "root": "apps/medical-record-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/medical-record-service/src",
+      "compilerOptions": { "tsConfigPath": "apps/medical-record-service/tsconfig.app.json" }
+    },
+    "billing-service": {
+      "type": "application",
+      "root": "apps/billing-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/billing-service/src",
+      "compilerOptions": { "tsConfigPath": "apps/billing-service/tsconfig.app.json" }
+    },
+    "file-service": {
+      "type": "application",
+      "root": "apps/file-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/file-service/src",
+      "compilerOptions": { "tsConfigPath": "apps/file-service/tsconfig.app.json" }
+    },
+    "notification-history-service": {
+      "type": "application",
+      "root": "apps/notification-history-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/notification-history-service/src",
+      "compilerOptions": { "tsConfigPath": "apps/notification-history-service/tsconfig.app.json" }
+    },
+    "common": {
+      "type": "library",
+      "root": "libs/common",
+      "entryFile": "index",
+      "sourceRoot": "libs/common/src",
+      "compilerOptions": { "tsConfigPath": "libs/common/tsconfig.lib.json" }
+    },
+    "database": {
+      "type": "library",
+      "root": "libs/database",
+      "entryFile": "index",
+      "sourceRoot": "libs/database/src",
+      "compilerOptions": { "tsConfigPath": "libs/database/tsconfig.lib.json" }
+    }
+  }
+}
