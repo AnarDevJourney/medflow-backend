@@ -11,7 +11,8 @@ export interface DatabaseModuleOptions {
 
 // Connects the app to its own database (DATABASE_URL). Entities are picked
 // up from TypeOrmModule.forFeature() calls; pending migrations run on
-// startup outside production (production runs them with `npm run db`).
+// startup outside production (production runs them with `npm run db`)
+// unless DB_MIGRATIONS_RUN says otherwise.
 @Module({})
 export class DatabaseModule {
   static forRoot(options: DatabaseModuleOptions): DynamicModule {
@@ -26,7 +27,12 @@ export class DatabaseModule {
             ),
             autoLoadEntities: true,
             migrations: options.migrations,
-            migrationsRun: config.get<string>('NODE_ENV') !== 'production',
+            // DB_MIGRATIONS_RUN=true|false overrides the default (used by
+            // docker-compose.yml, which runs production builds)
+            migrationsRun:
+              config.get<string>('DB_MIGRATIONS_RUN') !== undefined
+                ? config.get<string>('DB_MIGRATIONS_RUN') === 'true'
+                : config.get<string>('NODE_ENV') !== 'production',
           }),
         }),
       ],

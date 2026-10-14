@@ -40,6 +40,26 @@ curl localhost:3000/api/v1/health
 
 Run a single app: `npm run dev -- patient-service`.
 
+### Everything in Docker (one command)
+
+```bash
+npm run stack:up     # builds the 9 app images + starts infra and apps
+curl localhost:3000/api/v1/health
+npm run stack:logs   # follow logs
+npm run stack:down   # stop (volumes are kept)
+```
+
+`./scripts/run-all.sh` (or `npm run run-all`) does the same `up` and also opens one
+GNOME Terminal window with a live log tab per app + an `infra` tab.
+`./scripts/run-all.sh logs` only opens that window; `./scripts/run-all.sh down` stops.
+
+One shared multi-stage `Dockerfile` builds any app via `--build-arg APP=<app>`.
+`docker-compose.yml` includes the infra from `docker-compose.dev.yml` and adds
+the apps; only the gateway (3000) is published — services are reachable only
+inside the compose network. Infra uses the same host ports as in dev, so stop
+one stack (`infra:down` / `stack:down`) before starting the other.
+Their data volumes are separate (`medflow_*` vs `medflow-dev_*`).
+
 | Tool | URL |
 |---|---|
 | Gateway | http://localhost:3000/api/v1 |

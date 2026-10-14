@@ -1,0 +1,177 @@
+# Full stack in Docker: infrastructure (from docker-compose.dev.yml) + all 9 apps.
+#   npm run stack:up      → build images and start everything
+#   npm run stack:down    → stop (data volumes are kept)
+# Only the gateway (3000) is published for the apps; services are reachable
+# only inside the compose network, so every request goes through the gateway.
+# Infra ports (5433, 9092, 6379, 8080, 9000/9001, 1025/8025) are published as
+# in dev, so this stack and `npm run infra:up` cannot run at the same time.
+name: medflow
+
+include:
+  - docker-compose.dev.yml
+
+# ─── Shared fragments ─────────────────────────────────────────────────────────
+x-app: &app
+  build: &app-build
+    context: .
+    dockerfile: Dockerfile
+  init: true # tiny init as PID 1: reaps zombies, forwards signals
+  restart: unless-stopped
+
+x-common-env: &common-env
+  NODE_ENV: production
+  # Shared gateway ↔ services secret. Default is for local demos only —
+  # TODO(prod): set a real value in .env / the deploy environment.
+  INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me-0123456789abcdef}
+  # Production builds skip auto-migrations by default; this stack has no
+  # separate migration step, so each service migrates its DB on startup.
+  DB_MIGRATIONS_RUN: 'true'
+  # TODO(phase 3): services start using Kafka → also add
+  #   depends_on: kafka-init: condition: service_completed_successfully
+  KAFKA_BROKERS: kafka:9092
+  REDIS_URL: redis://redis:6379
+
+# Services: own DB + healthcheck on GET /health (no internal key needed)
+x-service: &service
+  <<: *app
+  depends_on:
+    postgres:
+      condition: service_healthy
+  healthcheck:
+    test: ['CMD-SHELL', 'wget -qO- http://localhost:$$PORT/health > /dev/null || exit 1']
+    interval: 10s
+    timeout: 5s
+    retries: 5
+    start_period: 20s
+
+services:
+  api-gateway:
+    <<: *app
+    build:
+      <<: *app-build
+      args: { APP: api-gateway }
+    image: medflow/api-gateway
+    environment:
+      <<: *common-env
+      PORT: 3000
+      # TODO(phase 11): the frontend URL in Docker (CORS + cookies)
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      AUTH_SERVICE_URL: http://auth-service:3001
+      STAFF_SERVICE_URL: http://staff-service:3002
+      PATIENT_SERVICE_URL: http://patient-service:3003
+      APPOINTMENT_SERVICE_URL: http://appointment-service:3004
+      RECORD_SERVICE_URL: http://medical-record-service:3005
+      BILLING_SERVICE_URL: http://billing-service:3006
+      FILE_SERVICE_URL: http://file-service:3007
+      NOTIFICATION_SERVICE_URL: http://notification-history-service:3008
+      # TODO(phase 2): JWT_ACCESS_SECRET / JWT_ACCESS_TTL (same secret as auth-service)
+    ports:
+      - '3000:3000'
+    depends_on:
+      redis: { condition: service_healthy }
+      auth-service: { condition: service_healthy }
+      staff-service: { condition: service_healthy }
+      patient-service: { condition: service_healthy }
+      appointment-service: { condition: service_healthy }
+      medical-record-service: { condition: service_healthy }
+      billing-service: { condition: service_healthy }
+      file-service: { condition: service_healthy }
+      notification-history-service: { condition: service_healthy }
+
+  auth-service:
+    <<: *service
+    build:
+      <<: *app-build
+      args: { APP: auth-service }
+    image: medflow/auth-service
+    environment:
+      <<: *common-env
+      PORT: 3001
+      DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/auth_db
+      # TODO(phase 2): JWT_ACCESS_SECRET, JWT_ACCESS_TTL, JWT_REFRESH_TTL,
+      #   SEED_ADMIN_EMAIL, SEED_ADMIN_PASSWORD, FRONTEND_URL (invite links)
+
+  staff-service:
+    <<: *service
+    build:
+      <<: *app-build
+      args: { APP: staff-service }
+    image: medflow/staff-service
+    environment:
+      <<: *common-env
+      PORT: 3002
+      DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/staff_db
+      # TODO(phase 5): AUTH_SERVICE_URL=http://auth-service:3001 (internal calls)
+
+  patient-service:
+    <<: *service
+    build:
+      <<: *app-build
+      args: { APP: patient-service }
+    image: medflow/patient-service
+    environment:
+      <<: *common-env
+      PORT: 3003
+      DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/patient_db
+
+  appointment-service:
+    <<: *service
+    build:
+      <<: *app-build
+      args: { APP: appointment-service }
+    image: medflow/appointment-service
+    environment:
+      <<: *common-env
+      PORT: 3004
+      DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/appointment_db
+      # TODO(phase 7): STAFF_SERVICE_URL / PATIENT_SERVICE_URL (internal calls);
+      #   depends_on redis (BullMQ jobs)
+
+  medical-record-service:
+    <<: *service
+    build:
+      <<: *app-build
+      args: { APP: medical-record-service }
+    image: medflow/medical-record-service
+    environment:
+      <<: *common-env
+      PORT: 3005
+      DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/record_db
+
+  billing-service:
+    <<: *service
+    build:
+      <<: *app-build
+      args: { APP: billing-service }
+    image: medflow/billing-service
+    environment:
+      <<: *common-env
+      PORT: 3006
+      DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/billing_db
+
+  file-service:
+    <<: *service
+    build:
+      <<: *app-build
+      args: { APP: file-service }
+    image: medflow/file-service
+    environment:
+      <<: *common-env
+      PORT: 3007
+      DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/file_db
+      # TODO(phase 10): MINIO_ENDPOINT=minio, MINIO_PORT=9000,
+      #   MINIO_ACCESS_KEY/SECRET_KEY, MINIO_BUCKET=medflow-files;
+      #   depends_on minio (service_healthy)
+
+  notification-history-service:
+    <<: *service
+    build:
+      <<: *app-build
+      args: { APP: notification-history-service }
+    image: medflow/notification-history-service
+    environment:
+      <<: *common-env
+      PORT: 3008
+      DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/notification_db
+      # TODO(phase 4): SMTP_HOST=mailpit, SMTP_PORT=1025, SMTP_FROM;
+      #   depends_on redis (email queue) + mailpit
