@@ -13,5 +13,10 @@ export const envValidationSchema = Joi.object({
   REDIS_URL: Joi.string()
     .uri({ scheme: ['redis', 'rediss'] })
     .required(),
+  // Same secret auth-service signs the access tokens with
+  JWT_ACCESS_SECRET: Joi.string().min(32).required(),
+  // Requests per minute per IP: whole API / login + forgot-password
+  RATE_LIMIT_DEFAULT: Joi.number().integer().min(1).default(100),
+  RATE_LIMIT_STRICT: Joi.number().integer().min(1).default(10),
   ...serviceUrls,
 });

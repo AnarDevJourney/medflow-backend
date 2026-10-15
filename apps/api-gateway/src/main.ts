@@ -12,8 +12,10 @@ import {
   TransformInterceptor,
 } from '@medflow/common';
 import { AppModule } from './app.module';
+import { AuthMiddleware } from './auth/auth.middleware';
 import { GatewayConfigService } from './config/gateway-config.service';
 import { ProxyService } from './proxy/proxy.service';
+import { RateLimitMiddleware } from './rate-limit/rate-limit.middleware';
 
 function notFoundFallback(req: Request, res: Response) {
   res.status(404).json({
@@ -36,13 +38,19 @@ async function bootstrap() {
   });
   const config = app.get(GatewayConfigService);
   const proxy = app.get(ProxyService);
+  const rateLimit = app.get(RateLimitMiddleware);
+  const auth = app.get(AuthMiddleware);
 
   app.use(helmet());
   app.enableCors({ origin: config.frontendUrl, credentials: true });
   app.use(requestIdMiddleware);
 
-  // Proxy runs before Nest's router; anything it doesn't own falls through
-  // to the gateway's own routes (/api/v1/health, /docs) or a 404.
+  // DOC 1.3 steps 3–6: rate limit → JWT + block-list → proxy (sets the
+  // trusted x-user-* headers). All run before Nest's router; anything the
+  // proxy doesn't own falls through to the gateway's own routes
+  // (/api/v1/health, /docs) or a 404.
+  app.use(rateLimit.middleware);
+  app.use(auth.middleware);
   app.use(proxy.middleware);
 
   app.setGlobalPrefix(API_PREFIX, {

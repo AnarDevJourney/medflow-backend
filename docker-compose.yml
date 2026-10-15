@@ -31,6 +31,10 @@ x-common-env: &common-env
   KAFKA_BROKERS: kafka:9092
   REDIS_URL: redis://redis:6379
 
+# Access JWT secret — only auth-service (signs) and the gateway (verifies) get it.
+# TODO(prod): set a real value in .env / the deploy environment.
+x-jwt-secret: &jwt-secret ${JWT_ACCESS_SECRET:-dev-jwt-access-secret-change-me-0123456789abcdef}
+
 # Services: own DB + healthcheck on GET /health (no internal key needed)
 x-service: &service
   <<: *app
@@ -54,6 +58,7 @@ services:
     environment:
       <<: *common-env
       PORT: 3000
+      JWT_ACCESS_SECRET: *jwt-secret
       # TODO(phase 11): the frontend URL in Docker (CORS + cookies)
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
       AUTH_SERVICE_URL: http://auth-service:3001
@@ -64,7 +69,6 @@ services:
       BILLING_SERVICE_URL: http://billing-service:3006
       FILE_SERVICE_URL: http://file-service:3007
       NOTIFICATION_SERVICE_URL: http://notification-history-service:3008
-      # TODO(phase 2): JWT_ACCESS_SECRET / JWT_ACCESS_TTL (same secret as auth-service)
     ports:
       - '3000:3000'
     depends_on:
@@ -88,8 +92,19 @@ services:
       <<: *common-env
       PORT: 3001
       DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/auth_db
-      # TODO(phase 2): JWT_ACCESS_SECRET, JWT_ACCESS_TTL, JWT_REFRESH_TTL,
-      #   SEED_ADMIN_EMAIL, SEED_ADMIN_PASSWORD, FRONTEND_URL (invite links)
+      JWT_ACCESS_SECRET: *jwt-secret
+      JWT_ACCESS_TTL: 15m
+      JWT_REFRESH_TTL: 7d
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173} # invite / reset links
+      # Demo admin — TODO(prod): real credentials or remove after first login
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@medflow.az}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-Admin12345}
+      # No emails before phase 4, so invite/reset links are logged.
+      # TODO(phase 4): remove once notification-history sends the emails.
+      LOG_AUTH_LINKS: 'true'
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy } # access-token block-list
 
   staff-service:
     <<: *service

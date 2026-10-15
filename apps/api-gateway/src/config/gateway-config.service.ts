@@ -22,6 +22,18 @@ export class GatewayConfigService {
     return this.config.getOrThrow<string>('INTERNAL_API_KEY');
   }
 
+  get jwtAccessSecret(): string {
+    return this.config.getOrThrow<string>('JWT_ACCESS_SECRET');
+  }
+
+  get rateLimitDefault(): number {
+    return Number(this.config.get('RATE_LIMIT_DEFAULT', 100));
+  }
+
+  get rateLimitStrict(): number {
+    return Number(this.config.get('RATE_LIMIT_STRICT', 10));
+  }
+
   serviceUrl(service: ServiceRoute): string {
     return this.config.getOrThrow<string>(service.urlEnv).replace(/\/+$/, '');
   }

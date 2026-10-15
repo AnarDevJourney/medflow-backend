@@ -5,6 +5,8 @@ import type { Socket } from 'node:net';
 import type { NextFunction, Request, Response } from 'express';
 import { createProxyMiddleware, RequestHandler } from 'http-proxy-middleware';
 import { API_PREFIX, ErrorCode, HEADERS } from '@medflow/common';
+import type { AuthenticatedRequest } from '../auth/authenticated-request';
+import { sendError } from '../common/send-error';
 import { GatewayConfigService } from '../config/gateway-config.service';
 import {
   SERVICES,
@@ -46,13 +48,22 @@ export class ProxyService {
       return;
     }
 
-    const route = this.routes.find((r) =>
-      r.prefixes.some((p) => req.path === p || req.path.startsWith(`${p}/`)),
-    );
+    const route = this.findRoute(req.path);
     if (!route) return next();
 
     void route.handler(req, res, next);
   };
+
+  // True for /api/v1/* paths forwarded to a service (not /socket.io)
+  ownsHttpPath(path: string): boolean {
+    return this.findRoute(path) !== undefined;
+  }
+
+  private findRoute(path: string): ProxyRoute | undefined {
+    return this.routes.find((r) =>
+      r.prefixes.some((p) => path === p || path.startsWith(`${p}/`)),
+    );
+  }
 
   // WebSocket upgrades bypass Express, so they are wired on the HTTP server
   readonly upgrade = (req: IncomingMessage, socket: Socket, head: Buffer) => {
@@ -79,12 +90,20 @@ export class ProxyService {
   }
 
   // Never trust identity headers coming from the browser: drop them and set
-  // our own. The JWT-derived x-user-* headers are added here in phase 2.
+  // our own from the JWT verified by AuthMiddleware (absent on public routes).
   private prepareHeaders(proxyReq: ClientRequest, req: IncomingMessage) {
     for (const name of proxyReq.getHeaderNames()) {
       if (name.startsWith('x-user-')) proxyReq.removeHeader(name);
     }
     proxyReq.setHeader(HEADERS.INTERNAL_KEY, this.config.internalApiKey);
+
+    const auth = (req as AuthenticatedRequest).auth;
+    if (auth) {
+      proxyReq.setHeader(HEADERS.USER_ID, auth.sub);
+      proxyReq.setHeader(HEADERS.USER_ROLE, auth.role);
+      // Non-ASCII names ("Məmmədova") are not valid in raw headers
+      proxyReq.setHeader(HEADERS.USER_NAME, encodeURIComponent(auth.name));
+    }
 
     const requestId = req.headers[HEADERS.REQUEST_ID];
     if (requestId) proxyReq.setHeader(HEADERS.REQUEST_ID, requestId);
@@ -108,19 +127,12 @@ export class ProxyService {
     }
 
     const label = service.name.replace(/-/g, ' ');
-    res.writeHead(503, { 'Content-Type': 'application/json' });
-    res.end(
-      JSON.stringify({
-        success: false,
-        error: {
-          statusCode: 503,
-          code: ErrorCode.SERVICE_UNAVAILABLE,
-          message: `${label.charAt(0).toUpperCase()}${label.slice(1)} is unavailable, please try again`,
-          path: req.url,
-          requestId: req.headers[HEADERS.REQUEST_ID] ?? null,
-          details: null,
-        },
-      }),
+    sendError(
+      req,
+      res,
+      503,
+      ErrorCode.SERVICE_UNAVAILABLE,
+      `${label.charAt(0).toUpperCase()}${label.slice(1)} is unavailable, please try again`,
     );
   }
 }

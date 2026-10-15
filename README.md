@@ -51,7 +51,8 @@ npm run stack:down   # stop (volumes are kept)
 
 `./scripts/run-all.sh` (or `npm run run-all`) does the same `up` and also opens one
 GNOME Terminal window with a live log tab per app + an `infra` tab.
-`./scripts/run-all.sh logs` only opens that window; `./scripts/run-all.sh down` stops.
+`./scripts/run-all.sh logs` only opens that window.
+`./scripts/stop-all.sh` (or `npm run stop-all`) stops the stack and closes the log window (data is kept).
 
 One shared multi-stage `Dockerfile` builds any app via `--build-arg APP=<app>`.
 `docker-compose.yml` includes the infra from `docker-compose.dev.yml` and adds
@@ -74,6 +75,18 @@ Their data volumes are separate (`medflow_*` vs `medflow-dev_*`).
 - Root `.env` — shared values (internal key, Redis, Kafka, service URLs, Docker infra).
 - `apps/<app>/.env` — app-specific values (`PORT`, `DATABASE_URL`).
 - Real environment variables override both. Every app validates its env with Joi and refuses to start if something is missing.
+
+## Authentication
+
+- `auth-service` issues tokens; the gateway verifies the access JWT (cookie `access_token`, 15 min) on every non-public request and forwards `x-user-id/role/name`.
+- Refresh token (cookie `refresh_token`, 7 days, path `/api/v1/auth`) is opaque, stored as sha256, rotated on every use; replaying a rotated token revokes the whole family.
+- Access tokens can be killed before they expire (Redis, checked by the gateway):
+  - logout → `auth:blocked-jti:<jti>` for the token's remaining lifetime
+  - deactivation, password reset, refresh-token reuse → `auth:revoked-before:<userId>` (all older tokens)
+- Rate limit (Redis, per IP): 10/min on login + forgot-password, 100/min elsewhere.
+- First admin is seeded from `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` (dev: `admin@medflow.az` / `Admin12345`).
+- No emails yet (phase 4): invite and reset links are printed in the auth-service log (`LOG_AUTH_LINKS`).
+- End-to-end check against the Docker stack: `./scripts/test-auth.sh`.
 
 ## Migrations
 
