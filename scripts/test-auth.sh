@@ -1,5 +1,5 @@
 #!/bin/bash
-# Phase 2 end-to-end checks of auth through the gateway (55 checks).
+# End-to-end checks of auth-service (docx 3.1–3.6 + 8.2) through the gateway.
 # Needs the Docker stack: ./scripts/run-all.sh, then ./scripts/test-auth.sh
 # Reads invite/reset links from the auth-service logs (LOG_AUTH_LINKS=true).
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -86,6 +86,75 @@ check "doctor's live access token → 401" 401 $(code -b $D/d.jar $G/auth/me)
 check "doctor refresh → 401" 401 $(code -b $D/d.jar -X POST $G/auth/refresh)
 check "doctor login → 401" 401 $(login $D/x.jar $EMAIL Secret123)
 check "deactivate again → 409" 409 $(code -b $D/a.jar -X PATCH $G/users/$DOC_ID/deactivate)
+
+echo "== User management (DOC 8.2)"
+redis_flush_rl
+J='content-type: application/json'
+field() { grep -o "\"$1\":[^,}]*" $D/body | head -1 | cut -d: -f2- | tr -d '"'; }
+check "list users" 200 $(code -b $D/a.jar "$G/users")
+[ "$(field total)" -ge 3 ] && check "list has meta.total ≥ 3" ok ok || check "meta.total" "≥3" "$(field total)"
+check "filter role+status" 200 $(code -b $D/a.jar "$G/users?role=DOCTOR&status=DEACTIVATED&limit=100")
+grep -q "$EMAIL" $D/body && check "deactivated doctor in filtered list" ok ok || check "deactivated doctor in filtered list" ok missing
+code -b $D/a.jar "$G/users?search=aysel%20m%C9%99mm%C9%99d" >/dev/null
+grep -q "$EMAIL" $D/body && check "search by full name (case-insensitive)" ok ok || check "search by full name" ok missing
+code -b $D/a.jar "$G/users?search=%25" >/dev/null
+check "search '%' is literal, not a wildcard" 0 "$(field total)"
+check "bad role filter → 400" 400 $(code -b $D/a.jar "$G/users?role=GOD")
+check "limit 101 → 400" 400 $(code -b $D/a.jar "$G/users?limit=101")
+check "user details" 200 $(code -b $D/a.jar $G/users/$DOC_ID)
+check "unknown user → 404" 404 $(code -b $D/a.jar $G/users/00000000-0000-4000-8000-000000000000)
+check "non-uuid id → 400" 400 $(code -b $D/a.jar $G/users/abc)
+
+echo "== Reactivate"
+check "reactivate doctor" 200 $(code -b $D/a.jar -X PATCH $G/users/$DOC_ID/reactivate)
+check "back to ACTIVE" ACTIVE "$(field status)"
+check "reactivate again → 409" 409 $(code -b $D/a.jar -X PATCH $G/users/$DOC_ID/reactivate)
+check "doctor can log in again" 200 $(login $D/d.jar $EMAIL Secret123)
+code -b $D/a.jar -X PATCH $G/users/$NURSE_ID/deactivate >/dev/null
+check "reactivate never-activated nurse" 200 $(code -b $D/a.jar -X PATCH $G/users/$NURSE_ID/reactivate)
+check "… goes back to INVITED" INVITED "$(field status)"
+check "user.reactivated events" 2 $(psql "select count(*) from outbox_events where event_type='user.reactivated' and occurred_at > '$START'")
+
+echo "== Admin edits a user"
+check "change doctor's role to NURSE" 200 $(code -b $D/a.jar -X PATCH $G/users/$DOC_ID -H "$J" -d '{"role":"NURSE","firstName":"Aysəl"}')
+check "role in response" NURSE "$(field role)"
+check "doctor's old access token → 401" 401 $(code -b $D/d.jar $G/auth/me)
+check "doctor refresh → 200" 200 $(code -b $D/d.jar -c $D/d.jar -X POST $G/auth/refresh)
+check "token now carries NURSE" NURSE "$(code -b $D/d.jar $G/auth/me >/dev/null; field role)"
+check "user.updated event" 1 $(psql "select count(*) from outbox_events where event_type='user.updated' and aggregate_id='$DOC_ID' and occurred_at > '$START'")
+check "changedFields recorded" '["firstName", "role"]' "$(psql "select payload->'payload'->'changedFields' from outbox_events where event_type='user.updated' and aggregate_id='$DOC_ID' order by occurred_at desc limit 1")"
+check "same values → no new event" 200 $(code -b $D/a.jar -X PATCH $G/users/$DOC_ID -H "$J" -d '{"role":"NURSE"}')
+check "… still 1 user.updated" 1 $(psql "select count(*) from outbox_events where event_type='user.updated' and aggregate_id='$DOC_ID' and occurred_at > '$START'")
+check "email not editable → 400" 400 $(code -b $D/a.jar -X PATCH $G/users/$DOC_ID -H "$J" -d '{"email":"x@y.az"}')
+check "cannot change own role" 422 $(code -b $D/a.jar -X PATCH $G/users/$ADMIN_ID -H "$J" -d '{"role":"DOCTOR"}')
+check "non-admin cannot list users" 403 $(code -b $D/d.jar $G/users)
+code -b $D/a.jar -X PATCH $G/users/$DOC_ID -H "$J" -d '{"role":"DOCTOR"}' >/dev/null
+code -b $D/d.jar -c $D/d.jar -X POST $G/auth/refresh >/dev/null
+
+echo "== Own profile"
+check "PATCH me (name)" 200 $(code -b $D/d.jar -X PATCH $G/auth/me -H "$J" -d '{"firstName":"Aysel","lastName":"Məmmədova-Quliyeva"}')
+grep -q 'Məmmədova-Quliyeva' $D/body && check "new name returned" ok ok || check "new name returned" ok missing
+check "avatar must be a uuid" 400 $(code -b $D/d.jar -X PATCH $G/auth/me -H "$J" -d '{"avatarFileId":"nope"}')
+check "set avatar" 200 $(code -b $D/d.jar -X PATCH $G/auth/me -H "$J" -d '{"avatarFileId":"11111111-1111-4111-8111-111111111111"}')
+check "remove avatar (null)" 200 $(code -b $D/d.jar -X PATCH $G/auth/me -H "$J" -d '{"avatarFileId":null}')
+check "role not editable via me → 400" 400 $(code -b $D/d.jar -X PATCH $G/auth/me -H "$J" -d '{"role":"ADMIN"}')
+check "without login → 401" 401 $(code -X PATCH $G/auth/me -H "$J" -d '{"firstName":"X"}')
+
+echo "== Change password"
+check "doctor second session" 200 $(login $D/d2.jar $EMAIL Secret123)
+check "wrong current password → 400" 400 $(code -b $D/d.jar -X PATCH $G/auth/change-password -H "$J" -d '{"currentPassword":"Wrong12345","newPassword":"Changed123"}')
+check "… field currentPassword" currentPassword "$(field field)"
+check "same as current → 400" 400 $(code -b $D/d.jar -X PATCH $G/auth/change-password -H "$J" -d '{"currentPassword":"Secret123","newPassword":"Secret123"}')
+check "weak new password → 400" 400 $(code -b $D/d.jar -X PATCH $G/auth/change-password -H "$J" -d '{"currentPassword":"Secret123","newPassword":"short"}')
+check "change password" 200 $(code -b $D/d.jar -c $D/d.jar -X PATCH $G/auth/change-password -H "$J" -d '{"currentPassword":"Secret123","newPassword":"Changed123"}')
+check "this session keeps working" 200 $(code -b $D/d.jar $G/auth/me)
+check "this session can refresh" 200 $(code -b $D/d.jar -c $D/d.jar -X POST $G/auth/refresh)
+check "other session access → 401" 401 $(code -b $D/d2.jar $G/auth/me)
+check "other session refresh → 401" 401 $(code -b $D/d2.jar -X POST $G/auth/refresh)
+check "old password → 401" 401 $(login $D/x.jar $EMAIL Secret123)
+check "new password → 200" 200 $(login $D/x.jar $EMAIL Changed123)
+check "password_changed via CHANGE" 1 $(psql "select count(*) from outbox_events where event_type='user.password_changed' and aggregate_id='$DOC_ID' and payload->'payload'->>'via'='CHANGE'")
+redis_flush_rl
 
 echo "== Forgot / reset password"
 check "forgot (existing)" 200 $(code -X POST $G/auth/forgot-password -H 'content-type: application/json' -d '{"email":"admin@medflow.az"}')

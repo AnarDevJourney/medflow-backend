@@ -11,6 +11,6 @@ import { UsersService } from './users.service';
   imports: [TypeOrmModule.forFeature([User, Invitation]), SessionsModule],
   controllers: [UsersController],
   providers: [UsersService, InvitationsService],
-  exports: [InvitationsService],
+  exports: [UsersService, InvitationsService],
 })
 export class UsersModule {}

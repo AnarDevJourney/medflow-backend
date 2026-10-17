@@ -18,10 +18,12 @@ export function isPublicRoute(method: string, path: string): boolean {
   return PUBLIC_ROUTES.some((r) => r.method === method && r.path.test(path));
 }
 
-// Stricter rate limit: password guessing and reset-email spam
+// Stricter rate limit: password guessing (also of the current password on
+// change-password with a stolen session) and reset-email spam
 const STRICT_ROUTES: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: 'POST', path: new RegExp(`^${AUTH}/login/?$`) },
   { method: 'POST', path: new RegExp(`^${AUTH}/forgot-password/?$`) },
+  { method: 'PATCH', path: new RegExp(`^${AUTH}/change-password/?$`) },
 ];
 
 export function isStrictRateLimitRoute(method: string, path: string): boolean {

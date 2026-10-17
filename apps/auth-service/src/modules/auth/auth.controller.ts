@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Req,
   Res,
@@ -23,8 +24,10 @@ import { getRequestMeta } from '../../common/request-meta';
 import { AuthConfigService } from '../../config/auth-config.service';
 import { clearAuthCookies, setAuthCookies } from '../sessions/auth-cookies';
 import { AuthService } from './auth.service';
+import { UpdateProfileDto } from '../users/dto/update-user.dto';
 import {
   AcceptInviteDto,
+  ChangePasswordDto,
   ForgotPasswordDto,
   LoginDto,
   ResetPasswordDto,
@@ -88,6 +91,34 @@ export class AuthController {
   @Roles(...ALL_ROLES)
   me(@CurrentUser() user: CurrentUserData) {
     return this.auth.me(user.id);
+  }
+
+  @Patch('me')
+  @Roles(...ALL_ROLES)
+  updateMe(
+    @Body() dto: UpdateProfileDto,
+    @CurrentUser() user: CurrentUserData,
+  ) {
+    return this.auth.updateMe(user, dto);
+  }
+
+  // Sets new cookies: this session continues, all others are logged out
+  @Patch('change-password')
+  @Roles(...ALL_ROLES)
+  async changePassword(
+    @Body() dto: ChangePasswordDto,
+    @CurrentUser() current: CurrentUserData,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { user, tokens } = await this.auth.changePassword(
+      current.id,
+      dto,
+      readCookie(req.headers.cookie, AUTH_COOKIES.REFRESH),
+      getRequestMeta(req),
+    );
+    setAuthCookies(res, tokens, this.config);
+    return { user };
   }
 
   @Get('invitations/:token')

@@ -10,7 +10,9 @@ const SOURCE = 'auth-service';
 export type AuthEventType =
   | 'user.invited'
   | 'user.activated'
+  | 'user.updated'
   | 'user.deactivated'
+  | 'user.reactivated'
   | 'user.session_revoked'
   | 'user.password_reset_requested'
   | 'user.password_changed';

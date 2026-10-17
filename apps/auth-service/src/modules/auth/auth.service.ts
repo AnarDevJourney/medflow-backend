@@ -2,7 +2,7 @@ import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
-import { AppException, ErrorCode } from '@medflow/common';
+import { AppException, CurrentUserData, ErrorCode } from '@medflow/common';
 import { generateToken, sha256 } from '../../common/crypto.util';
 import {
   assertPasswordPolicy,
@@ -19,9 +19,12 @@ import { Invitation } from '../users/entities/invitation.entity';
 import { User } from '../users/entities/user.entity';
 import { UserStatus } from '../users/entities/user-status.enum';
 import { InvitationsService } from '../users/invitations.service';
+import { UpdateProfileDto } from '../users/dto/update-user.dto';
 import { ProfileResponse, toProfileResponse } from '../users/user.mapper';
+import { UsersService } from '../users/users.service';
 import {
   AcceptInviteDto,
+  ChangePasswordDto,
   ForgotPasswordDto,
   LoginDto,
   ResetPasswordDto,
@@ -50,6 +53,14 @@ const invalidCredentials = () =>
     'Invalid email or password',
   );
 
+const passwordFieldError = (field: string, message: string) =>
+  new AppException(
+    HttpStatus.BAD_REQUEST,
+    ErrorCode.VALIDATION_ERROR,
+    message,
+    [{ field, errors: [message] }],
+  );
+
 const invalidResetToken = () =>
   new AppException(
     HttpStatus.BAD_REQUEST,
@@ -70,6 +81,7 @@ export class AuthService {
     private readonly sessions: SessionsService,
     private readonly revocation: TokenRevocationService,
     private readonly invitations: InvitationsService,
+    private readonly usersService: UsersService,
     private readonly outbox: OutboxService,
     private readonly config: AuthConfigService,
   ) {}
@@ -121,6 +133,85 @@ export class AuthService {
       );
     }
     return toProfileResponse(user);
+  }
+
+  updateMe(
+    actor: CurrentUserData,
+    dto: UpdateProfileDto,
+  ): Promise<ProfileResponse> {
+    return this.usersService.updateProfile(actor, dto);
+  }
+
+  // DOC 8.2: new password, every *other* session revoked, this one continues
+  // with fresh tokens (the old access token dies with the rest).
+  async changePassword(
+    userId: string,
+    dto: ChangePasswordDto,
+    rawRefreshToken: string | undefined,
+    meta: RequestMeta,
+  ): Promise<SessionResult> {
+    assertPasswordPolicy(dto.newPassword);
+
+    const user = await this.users
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .where('user.id = :id', { id: userId })
+      .getOne();
+    if (!user?.passwordHash || user.status !== UserStatus.ACTIVE) {
+      throw new AppException(
+        HttpStatus.UNAUTHORIZED,
+        ErrorCode.UNAUTHORIZED,
+        'Authentication required',
+      );
+    }
+    if (!(await verifyPassword(dto.currentPassword, user.passwordHash))) {
+      throw passwordFieldError(
+        'currentPassword',
+        'Current password is incorrect',
+      );
+    }
+    if (dto.newPassword === dto.currentPassword) {
+      throw passwordFieldError(
+        'newPassword',
+        'New password must be different from the current one',
+      );
+    }
+    const passwordHash = await hashPassword(dto.newPassword);
+
+    // Redis first: if it fails nothing has changed yet
+    await this.revocation.revokeAllTokens(user.id);
+
+    const tokens = await this.dataSource.transaction(async (em) => {
+      const now = new Date();
+      await em.update(User, user.id, { passwordHash, passwordChangedAt: now });
+      // Reset links sent before the change must not work any more
+      await em.update(
+        PasswordReset,
+        { userId: user.id, usedAt: IsNull() },
+        { usedAt: now },
+      );
+      const issued = await this.sessions.revokeOtherSessions(
+        em,
+        user,
+        rawRefreshToken,
+        meta,
+      );
+
+      await this.outbox.add(em, {
+        eventType: 'user.password_changed',
+        userId: user.id,
+        actor: { id: user.id, name: user.fullName, role: user.role },
+        payload: {
+          userId: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          via: 'CHANGE',
+        },
+      });
+      return issued;
+    });
+
+    return { user: toProfileResponse(user), tokens };
   }
 
   // DOC 3.3 step 5: data for the "set your password" form
@@ -258,6 +349,7 @@ export class AuthService {
           userId: user.id,
           email: user.email,
           firstName: user.firstName,
+          via: 'RESET',
         },
       });
     });

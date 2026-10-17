@@ -81,3 +81,15 @@ export class ResetPasswordDto {
   @NewPassword()
   password: string;
 }
+
+export class ChangePasswordDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  currentPassword: string;
+
+  @ApiProperty({ example: 'NewSecret123' })
+  @NewPassword()
+  newPassword: string;
+}

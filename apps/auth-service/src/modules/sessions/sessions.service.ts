@@ -190,6 +190,37 @@ export class SessionsService {
     );
   }
 
+  // Password change: every refresh token of the user is revoked, but the
+  // caller stays logged in — the presented refresh token is rotated inside
+  // its own family, so only the *other* sessions end. A missing, expired or
+  // already revoked token just gets a brand-new session.
+  async revokeOtherSessions(
+    em: EntityManager,
+    user: User,
+    rawRefreshToken: string | undefined,
+    meta: RequestMeta,
+  ): Promise<IssuedTokens> {
+    const current = rawRefreshToken
+      ? await em.findOne(RefreshToken, {
+          where: { tokenHash: sha256(rawRefreshToken), userId: user.id },
+          lock: { mode: 'pessimistic_write' },
+        })
+      : null;
+    const live =
+      current && !current.revokedAt && current.expiresAt.getTime() > Date.now()
+        ? current
+        : null;
+
+    await this.revokeAllRefreshTokens(em, user.id);
+    const next = await this.issue(em, user, meta, live?.familyId);
+    if (live) {
+      await em.update(RefreshToken, live.id, {
+        replacedBy: next.refreshTokenId,
+      });
+    }
+    return { accessToken: next.accessToken, refreshToken: next.refreshToken };
+  }
+
   private async verifyAccessToken(
     token: string,
   ): Promise<AccessTokenPayload | null> {
