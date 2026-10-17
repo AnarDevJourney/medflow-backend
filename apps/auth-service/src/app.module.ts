@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
 import { join } from 'node:path';
 import { createConfigModule, HealthModule, RedisModule } from '@medflow/common';
+import { Topics } from '@medflow/contracts';
 import { DatabaseModule } from '@medflow/database';
+import { KafkaModule, OutboxModule } from '@medflow/kafka';
 import { AuthConfigModule } from './config/auth-config.module';
 import { envValidationSchema } from './config/env.validation';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
-import { OutboxModule } from './outbox/outbox.module';
 import { AdminSeedService } from './seed/admin-seed.service';
 
 @Module({
@@ -17,7 +18,8 @@ import { AdminSeedService } from './seed/admin-seed.service';
       migrations: [join(__dirname, 'database/migrations/*.js')],
     }),
     RedisModule,
-    OutboxModule,
+    KafkaModule.forRoot({ serviceName: 'auth-service' }),
+    OutboxModule.forRoot({ topic: Topics.AUTH }),
     UsersModule,
     AuthModule,
     HealthModule,

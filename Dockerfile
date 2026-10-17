@@ -28,6 +28,10 @@ ENV NODE_ENV=production
 
 ARG APP
 ENV APP=${APP}
+# DNS lookups run on libuv's thread pool (default 4). While Kafka is gone
+# from Docker DNS, failing lookups of "kafka" can hold every thread and
+# delay new Postgres connections — more threads keep the DB path free.
+ENV UV_THREADPOOL_SIZE=16
 
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=deps --chown=node:node /app/package.json ./package.json

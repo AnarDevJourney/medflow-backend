@@ -3,7 +3,7 @@ import { DataSource } from 'typeorm';
 import { Role } from '@medflow/common';
 import { hashPassword } from '../common/password.util';
 import { AuthConfigService } from '../config/auth-config.service';
-import { OutboxService } from '../outbox/outbox.service';
+import { OutboxService } from '@medflow/kafka';
 import { User } from '../modules/users/entities/user.entity';
 import { UserStatus } from '../modules/users/entities/user-status.enum';
 
@@ -45,7 +45,7 @@ export class AdminSeedService implements OnApplicationBootstrap {
       );
 
       // Same events as a real invite + accept, so staff-service creates a
-      // profile once Kafka publishing exists (phase 3)
+      // profile for the admin too
       const userData = {
         userId: admin.id,
         email: admin.email,
@@ -55,7 +55,8 @@ export class AdminSeedService implements OnApplicationBootstrap {
       };
       await this.outbox.add(em, {
         eventType: 'user.invited',
-        userId: admin.id,
+        aggregateType: 'USER',
+        aggregateId: admin.id,
         actor: null,
         payload: {
           ...userData,
@@ -68,7 +69,8 @@ export class AdminSeedService implements OnApplicationBootstrap {
       });
       await this.outbox.add(em, {
         eventType: 'user.activated',
-        userId: admin.id,
+        aggregateType: 'USER',
+        aggregateId: admin.id,
         actor: null,
         payload: userData,
       });

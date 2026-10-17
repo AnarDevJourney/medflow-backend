@@ -13,3 +13,13 @@ export const postgresUrl = () =>
   Joi.string()
     .uri({ scheme: ['postgres', 'postgresql'] })
     .required();
+
+// "kafka:9092" or "host1:9092,host2:9092" — for apps that use libs/kafka
+export const kafkaBrokers = () =>
+  Joi.string()
+    .pattern(/^[\w.-]+:\d+(,[\w.-]+:\d+)*$/)
+    .required()
+    .messages({
+      'string.pattern.base':
+        'KAFKA_BROKERS must look like "host:port,host:port"',
+    });

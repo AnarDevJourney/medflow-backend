@@ -6,7 +6,7 @@ import { AccessTokenPayload, AppException, ErrorCode } from '@medflow/common';
 import { RequestMeta } from '../../common/request-meta';
 import { generateToken, sha256 } from '../../common/crypto.util';
 import { AuthConfigService } from '../../config/auth-config.service';
-import { OutboxService } from '../../outbox/outbox.service';
+import { OutboxService } from '@medflow/kafka';
 import { User } from '../users/entities/user.entity';
 import { UserStatus } from '../users/entities/user-status.enum';
 import { RefreshToken } from './entities/refresh-token.entity';
@@ -147,7 +147,8 @@ export class SessionsService {
       );
       await this.outbox.add(em, {
         eventType: 'user.session_revoked',
-        userId,
+        aggregateType: 'USER',
+        aggregateId: userId,
         actor: null,
         payload: { userId, familyId, reason: 'REFRESH_TOKEN_REUSE' },
       });

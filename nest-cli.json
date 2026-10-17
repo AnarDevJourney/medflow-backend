@@ -86,6 +86,20 @@
       "entryFile": "index",
       "sourceRoot": "libs/database/src",
       "compilerOptions": { "tsConfigPath": "libs/database/tsconfig.lib.json" }
+    },
+    "contracts": {
+      "type": "library",
+      "root": "libs/contracts",
+      "entryFile": "index",
+      "sourceRoot": "libs/contracts/src",
+      "compilerOptions": { "tsConfigPath": "libs/contracts/tsconfig.lib.json" }
+    },
+    "kafka": {
+      "type": "library",
+      "root": "libs/kafka",
+      "entryFile": "index",
+      "sourceRoot": "libs/kafka/src",
+      "compilerOptions": { "tsConfigPath": "libs/kafka/tsconfig.lib.json" }
     }
   }
 }

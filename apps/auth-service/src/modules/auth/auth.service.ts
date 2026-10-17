@@ -12,7 +12,7 @@ import {
 } from '../../common/password.util';
 import { RequestMeta } from '../../common/request-meta';
 import { AuthConfigService } from '../../config/auth-config.service';
-import { OutboxService } from '../../outbox/outbox.service';
+import { OutboxService } from '@medflow/kafka';
 import { IssuedTokens, SessionsService } from '../sessions/sessions.service';
 import { TokenRevocationService } from '../sessions/token-revocation.service';
 import { Invitation } from '../users/entities/invitation.entity';
@@ -199,7 +199,8 @@ export class AuthService {
 
       await this.outbox.add(em, {
         eventType: 'user.password_changed',
-        userId: user.id,
+        aggregateType: 'USER',
+        aggregateId: user.id,
         actor: { id: user.id, name: user.fullName, role: user.role },
         payload: {
           userId: user.id,
@@ -256,7 +257,8 @@ export class AuthService {
 
       await this.outbox.add(em, {
         eventType: 'user.activated',
-        userId: user.id,
+        aggregateType: 'USER',
+        aggregateId: user.id,
         actor: { id: user.id, name: user.fullName, role: user.role },
         payload: {
           userId: user.id,
@@ -295,7 +297,8 @@ export class AuthService {
       });
       await this.outbox.add(em, {
         eventType: 'user.password_reset_requested',
-        userId: user.id,
+        aggregateType: 'USER',
+        aggregateId: user.id,
         actor: null,
         payload: {
           userId: user.id,
@@ -343,7 +346,8 @@ export class AuthService {
 
       await this.outbox.add(em, {
         eventType: 'user.password_changed',
-        userId: user.id,
+        aggregateType: 'USER',
+        aggregateId: user.id,
         actor: { id: user.id, name: user.fullName, role: user.role },
         payload: {
           userId: user.id,

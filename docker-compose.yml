@@ -26,8 +26,6 @@ x-common-env: &common-env
   # Production builds skip auto-migrations by default; this stack has no
   # separate migration step, so each service migrates its DB on startup.
   DB_MIGRATIONS_RUN: 'true'
-  # TODO(phase 3): services start using Kafka → also add
-  #   depends_on: kafka-init: condition: service_completed_successfully
   KAFKA_BROKERS: kafka:9092
   REDIS_URL: redis://redis:6379
 
@@ -104,7 +102,8 @@ services:
       LOG_AUTH_LINKS: 'true'
     depends_on:
       postgres: { condition: service_healthy }
-      redis: { condition: service_healthy } # access-token block-list
+      redis: { condition: service_healthy } # block-list + outbox poller (BullMQ)
+      kafka-init: { condition: service_completed_successfully } # topics exist
 
   staff-service:
     <<: *service
@@ -117,6 +116,9 @@ services:
       PORT: 3002
       DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/staff_db
       # TODO(phase 5): AUTH_SERVICE_URL=http://auth-service:3001 (internal calls)
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully } # consumes auth.events
 
   patient-service:
     <<: *service

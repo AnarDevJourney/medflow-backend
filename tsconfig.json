@@ -24,7 +24,11 @@
       "@medflow/common": ["./libs/common/src"],
       "@medflow/common/*": ["./libs/common/src/*"],
       "@medflow/database": ["./libs/database/src"],
-      "@medflow/database/*": ["./libs/database/src/*"]
+      "@medflow/database/*": ["./libs/database/src/*"],
+      "@medflow/contracts": ["./libs/contracts/src"],
+      "@medflow/contracts/*": ["./libs/contracts/src/*"],
+      "@medflow/kafka": ["./libs/kafka/src"],
+      "@medflow/kafka/*": ["./libs/kafka/src/*"]
     }
   },
   "exclude": ["node_modules", "dist"]

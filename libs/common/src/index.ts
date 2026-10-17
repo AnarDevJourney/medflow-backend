@@ -15,6 +15,7 @@ export * from './exceptions/app.exception';
 export * from './filters/http-exception.filter';
 export * from './guards/internal-key.guard';
 export * from './guards/roles.guard';
+export * from './health/health-checks.registry';
 export * from './health/health.module';
 export * from './interceptors/transform.interceptor';
 export * from './interfaces/current-user.interface';

@@ -20,6 +20,8 @@ lastlink() { # waits until a link different from $2 shows up (docker logs lag a 
   local t; for _ in $(seq 1 20); do
     t=$($DC logs auth-service 2>&1 | grep "$1" | tail -1 | grep -o 'token=[A-Za-z0-9_-]*' | cut -d= -f2)
     [ -n "$t" ] && [ "$t" != "$2" ] && { echo $t; return; }; sleep 0.2; done; echo "$t"; }
+# The stack may still be starting: wait until the gateway reports all green
+for _ in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 $G/health)" = 200 ] && break; sleep 1; done
 SUF=$RANDOM
 START=$(psql "select now()")
 redis_flush_rl

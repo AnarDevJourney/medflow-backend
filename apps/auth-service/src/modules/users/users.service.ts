@@ -10,7 +10,7 @@ import {
   parseSort,
   skipOf,
 } from '@medflow/common';
-import { OutboxService } from '../../outbox/outbox.service';
+import { OutboxService } from '@medflow/kafka';
 import { SessionsService } from '../sessions/sessions.service';
 import { TokenRevocationService } from '../sessions/token-revocation.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -160,7 +160,8 @@ export class UsersService {
       const invitation = await this.invitations.create(em, created, actor.id);
       await this.outbox.add(em, {
         eventType: 'user.invited',
-        userId: created.id,
+        aggregateType: 'USER',
+        aggregateId: created.id,
         actor,
         payload: {
           userId: created.id,
@@ -199,7 +200,8 @@ export class UsersService {
       const invitation = await this.invitations.create(em, user, actor.id);
       await this.outbox.add(em, {
         eventType: 'user.invited',
-        userId: user.id,
+        aggregateType: 'USER',
+        aggregateId: user.id,
         actor,
         payload: {
           userId: user.id,
@@ -247,7 +249,8 @@ export class UsersService {
       await this.sessions.revokeAllRefreshTokens(em, user.id);
       await this.outbox.add(em, {
         eventType: 'user.deactivated',
-        userId: user.id,
+        aggregateType: 'USER',
+        aggregateId: user.id,
         actor,
         payload: { userId: user.id, email: user.email, role: user.role },
       });
@@ -280,7 +283,8 @@ export class UsersService {
       await em.update(User, user.id, { status });
       await this.outbox.add(em, {
         eventType: 'user.reactivated',
-        userId: user.id,
+        aggregateType: 'USER',
+        aggregateId: user.id,
         actor,
         payload: {
           userId: user.id,
@@ -307,7 +311,8 @@ export class UsersService {
     Object.assign(user, changes);
     await this.outbox.add(em, {
       eventType: 'user.updated',
-      userId: user.id,
+      aggregateType: 'USER',
+      aggregateId: user.id,
       actor,
       payload: {
         userId: user.id,

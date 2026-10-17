@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { baseEnvSchema, postgresUrl } from '@medflow/common';
+import { baseEnvSchema, kafkaBrokers, postgresUrl } from '@medflow/common';
 
 // "15m", "7d", "3600s" …
 const duration = () => Joi.string().pattern(/^\d+[smhd]$/);
@@ -11,6 +11,7 @@ export const envValidationSchema = Joi.object({
   REDIS_URL: Joi.string()
     .uri({ scheme: ['redis', 'rediss'] })
     .required(),
+  KAFKA_BROKERS: kafkaBrokers(),
   FRONTEND_URL: Joi.string().uri().required(),
 
   // Same secret as the gateway (which verifies the tokens)
