@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EntityManager } from 'typeorm';
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
-import { Topic, Topics } from '@medflow/contracts';
+import { DOMAIN_TOPICS } from '@medflow/contracts';
 import type { EventEnvelope } from '@medflow/contracts';
 import { BaseBatchConsumer } from '@medflow/kafka';
 import { ActionHistory } from '../modules/history/entities/action-history.entity';
@@ -10,11 +10,6 @@ import {
   HistoryMapper,
   NewActionHistory,
 } from '../modules/history/mapper/history.mapper';
-
-// Every domain topic (not the dead letters)
-const DOMAIN_TOPICS: readonly Topic[] = Object.values(Topics).filter(
-  (topic) => topic !== Topics.DEAD_LETTER,
-);
 
 // 13 parameters per row; Postgres allows 65 535 per statement, and 1 MB of
 // small events can be a few thousand rows
@@ -39,8 +34,9 @@ export class ActionHistoryConsumer extends BaseBatchConsumer<NewActionHistory> {
     this.maxBytes = config.getOrThrow<number>('HISTORY_BATCH_MAX_BYTES');
   }
 
-  protected toRow(event: EventEnvelope): NewActionHistory | null {
-    return this.mapper.map(event);
+  protected toRows(event: EventEnvelope): NewActionHistory[] {
+    const row = this.mapper.map(event);
+    return row ? [row] : [];
   }
 
   // INSERT … ON CONFLICT (event_id) DO NOTHING: a redelivered event (also
@@ -48,8 +44,8 @@ export class ActionHistoryConsumer extends BaseBatchConsumer<NewActionHistory> {
   protected async saveRows(
     rows: NewActionHistory[],
     em: EntityManager,
-  ): Promise<number> {
-    let inserted = 0;
+  ): Promise<unknown[]> {
+    const inserted: unknown[] = [];
     for (let i = 0; i < rows.length; i += ROWS_PER_INSERT) {
       const result = await em
         .createQueryBuilder()
@@ -66,7 +62,7 @@ export class ActionHistoryConsumer extends BaseBatchConsumer<NewActionHistory> {
         .returning('id')
         .updateEntity(false)
         .execute();
-      inserted += (result.raw as unknown[]).length;
+      inserted.push(...(result.raw as unknown[]));
     }
     return inserted;
   }

@@ -136,7 +136,7 @@ check "all $N stored after the restart (≤ 60 s)" $N $(waitfor 60 $N batched)
 hist_log $SINCE "file.events\[" >$D/batches
 LINES=$(wc -l <$D/batches)
 MAX=$(grep -o '\] [0-9]* message' $D/batches | grep -o '[0-9]*' | sort -n | tail -1)
-SUM=$(grep -o '→ [0-9]* inserted' $D/batches | grep -o '[0-9]*' | awk '{s+=$1} END {print s}')
+SUM=$(grep -o '→ [0-9]* row(s) inserted' $D/batches | grep -o '→ [0-9]*' | grep -o '[0-9]*' | awk '{s+=$1} END {print s}')
 echo "    $N events → $LINES transaction(s), largest batch $MAX message(s)"
 check "inserted counts add up" $N "$SUM"
 [ "$LINES" -le 30 ] && check "a handful of transactions, not $N" ok ok || check "a handful of transactions, not $N" "≤30" "$LINES"

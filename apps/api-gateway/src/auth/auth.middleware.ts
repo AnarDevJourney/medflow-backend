@@ -5,8 +5,8 @@ import Redis from 'ioredis';
 import {
   AccessTokenPayload,
   AUTH_COOKIES,
-  AUTH_REDIS_KEYS,
   ErrorCode,
+  isAccessTokenRevoked,
   readCookie,
   REDIS_CLIENT,
 } from '@medflow/common';
@@ -70,13 +70,9 @@ export class AuthMiddleware {
       );
     }
 
-    let blocked: string | null;
-    let revokedBefore: string | null;
+    let revoked: boolean;
     try {
-      [blocked, revokedBefore] = await this.redis.mget(
-        AUTH_REDIS_KEYS.blockedToken(payload.jti),
-        AUTH_REDIS_KEYS.revokedBefore(payload.sub),
-      );
+      revoked = await isAccessTokenRevoked(this.redis, payload);
     } catch (error) {
       // Fail closed: without the block-list we cannot tell a logged-out token
       this.logger.error(`Block-list check failed: ${(error as Error).message}`);
@@ -90,11 +86,8 @@ export class AuthMiddleware {
     }
 
     // Logged-out token, or issued before a deactivation / password reset /
-    // refresh-token reuse (compared in ms; a missing iatMs counts as revoked)
-    if (
-      blocked ||
-      (revokedBefore && !(payload.iatMs >= Number(revokedBefore)))
-    ) {
+    // refresh-token reuse
+    if (revoked) {
       return sendError(
         req,
         res,

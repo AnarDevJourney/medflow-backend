@@ -12,3 +12,8 @@ export const Topics = {
 } as const;
 
 export type Topic = (typeof Topics)[keyof typeof Topics];
+
+// Every business topic (not the dead letters) — what notification-history reads
+export const DOMAIN_TOPICS: readonly Topic[] = Object.values(Topics).filter(
+  (topic) => topic !== Topics.DEAD_LETTER,
+);

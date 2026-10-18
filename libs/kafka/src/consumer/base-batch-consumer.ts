@@ -30,20 +30,28 @@ interface Rejected {
   error: Error;
 }
 
-interface SaveResult {
-  inserted: number;
-  poisoned: Rejected[];
+// One message of the batch with the rows it produced
+interface Item<R> {
+  message: KafkaMessage;
+  rows: R[];
+}
+
+interface SaveResult<S> {
+  saved: S[];
+  poisoned: Item<unknown>[];
+  errors: Rejected[];
 }
 
 // Base class of a high-volume consumer that writes many events with ONE
-// database statement (notification-history's action history reads every
-// topic). A subclass names its topics, maps each event to a row and stores
-// a list of rows idempotently (INSERT … ON CONFLICT DO NOTHING):
+// database statement (notification-history reads every topic for the action
+// history and the in-app notifications). A subclass names its topics, maps
+// each event to rows and stores a list of rows idempotently
+// (INSERT … ON CONFLICT DO NOTHING … RETURNING):
 //
 //   @Injectable()
 //   export class ActionHistoryConsumer extends BaseBatchConsumer<Row> {
 //     protected readonly topics = [Topics.AUTH, Topics.STAFF, …];
-//     protected toRow(event) { return mapper.map(event); }   // null = skip
+//     protected toRows(event) { return [mapper.map(event)]; }  // [] = skip
 //     protected saveRows(rows, em) { return repo.insertIgnore(rows, em); }
 //   }
 //
@@ -51,16 +59,18 @@ interface SaveResult {
 // the broker answers as soon as ANY message is there — it never waits for
 // the megabyte to fill up; under load a fetch simply carries up to 1 MB.
 // KafkaJS hands the fetch over per partition (eachBatch), and every
-// partition batch is stored in one transaction, then its offset committed.
+// partition batch is stored in one transaction, then afterCommit runs (e.g.
+// WebSocket push) and the offset is committed.
 //
 // Failures:
-// - not an envelope / toRow throws → that message alone goes to the DLQ
+// - not an envelope / toRows throws → that message alone goes to the DLQ
 // - a data error (SQLSTATE 22xxx/23xxx, e.g. a value too long) → the batch
-//   is retried row by row, so only the poisoned row goes to the DLQ
+//   is retried message by message, so only the poisoned one goes to the DLQ
 // - anything else (database down) → retried 1 s, 5 s, 15 s; then thrown:
 //   KafkaJS restarts the consumer and refetches from the last committed
 //   offset, nothing is dead-lettered for an outage
-export abstract class BaseBatchConsumer<R>
+// - afterCommit throws → logged only; the rows are already stored
+export abstract class BaseBatchConsumer<R, S = unknown>
   implements OnApplicationBootstrap, BeforeApplicationShutdown
 {
   protected abstract readonly topics: readonly Topic[];
@@ -78,13 +88,21 @@ export abstract class BaseBatchConsumer<R>
   protected readonly logger = new Logger(this.constructor.name);
   private consumer?: Consumer;
 
-  // The row to store for an event; null = not interesting, skipped.
-  // Throwing means the event can never be stored → dead letters.
-  protected abstract toRow(event: EventEnvelope): R | null;
+  // The rows to store for an event; [] = not interesting, skipped. Throwing
+  // means the event can never be stored → dead letters.
+  protected abstract toRows(event: EventEnvelope): R[] | Promise<R[]>;
 
   // Stores the rows in the given transaction, ignoring rows that already
-  // exist (redelivery). Returns how many rows were really inserted.
-  protected abstract saveRows(rows: R[], em: EntityManager): Promise<number>;
+  // exist (redelivery). Returns the rows really inserted (RETURNING).
+  protected abstract saveRows(rows: R[], em: EntityManager): Promise<S[]>;
+
+  // After the transaction committed: `saved` = the new rows only (never a
+  // duplicate, never a rolled-back row), `events` = every event of the batch
+  protected afterCommit(saved: S[], events: EventEnvelope[]): Promise<void> {
+    void saved;
+    void events;
+    return Promise.resolve();
+  }
 
   protected get groupId(): string {
     const name = this.options.serviceName;
@@ -121,34 +139,49 @@ export abstract class BaseBatchConsumer<R>
     const { topic, partition, messages } = batch;
     if (messages.length === 0) return;
 
-    const items: { message: KafkaMessage; row: R }[] = [];
+    const items: Item<R>[] = [];
+    const events: EventEnvelope[] = [];
     const rejected: Rejected[] = [];
     let skipped = 0;
     for (const message of messages) {
       try {
-        const row = this.toRow(parseEnvelope(message));
-        if (row === null) skipped++;
-        else items.push({ message, row });
+        const event = parseEnvelope(message);
+        const rows = await this.toRows(event);
+        events.push(event);
+        if (rows.length === 0) skipped++;
+        else items.push({ message, rows });
       } catch (error) {
         rejected.push({ message, error: error as Error });
       }
     }
 
-    let inserted = 0;
-    let poisoned = 0;
+    const total = items.reduce((sum, item) => sum + item.rows.length, 0);
+    let saved: S[] = [];
+    let poisonedRows = 0;
     if (items.length > 0) {
       const result = await this.save(items, () => payload.heartbeat());
-      inserted = result.inserted;
-      poisoned = result.poisoned.length;
-      rejected.push(...result.poisoned);
+      saved = result.saved;
+      poisonedRows = result.poisoned.reduce((n, i) => n + i.rows.length, 0);
+      rejected.push(...result.errors);
+    }
+
+    if (events.length > 0) {
+      try {
+        await this.afterCommit(saved, events);
+      } catch (error) {
+        this.logger.error(`afterCommit failed: ${(error as Error).message}`);
+      }
     }
     for (const { message, error } of rejected) {
       await this.deadLetter(topic, partition, message, error);
     }
 
-    const duplicates = items.length - inserted - poisoned;
+    const duplicates = total - saved.length - poisonedRows;
     this.logger.log(
-      `${topic}[${partition}] ${messages.length} message(s) → ${inserted} inserted in one transaction` +
+      `${topic}[${partition}] ${messages.length} message(s) → ` +
+        (total > 0
+          ? `${saved.length} row(s) inserted in one transaction`
+          : 'nothing to store') +
         (duplicates > 0 ? `, ${duplicates} duplicate(s)` : '') +
         (skipped > 0 ? `, ${skipped} skipped` : '') +
         (rejected.length > 0 ? `, ${rejected.length} dead-lettered` : ''),
@@ -171,29 +204,27 @@ export abstract class BaseBatchConsumer<R>
   }
 
   private async save(
-    items: { message: KafkaMessage; row: R }[],
+    items: Item<R>[],
     heartbeat: () => Promise<void>,
-  ): Promise<SaveResult> {
+  ): Promise<SaveResult<S>> {
+    const rows = items.flatMap((item) => item.rows);
     for (let attempt = 0; ; attempt++) {
       try {
-        const inserted = await this.dataSource.transaction((em) =>
-          this.saveRows(
-            items.map((item) => item.row),
-            em,
-          ),
+        const saved = await this.dataSource.transaction((em) =>
+          this.saveRows(rows, em),
         );
-        return { inserted, poisoned: [] };
+        return { saved, poisoned: [], errors: [] };
       } catch (error) {
         if (isDataError(error)) {
           this.logger.warn(
-            `Batch of ${items.length} rejected by the database (${(error as Error).message}), saving row by row`,
+            `Batch of ${rows.length} row(s) rejected by the database (${(error as Error).message}), saving message by message`,
           );
           return this.saveOneByOne(items);
         }
         if (attempt >= RETRY_DELAYS_MS.length) throw error;
         const delay = RETRY_DELAYS_MS[attempt];
         this.logger.warn(
-          `Batch of ${items.length} failed (attempt ${attempt + 1}), retrying in ${delay / 1000}s: ${(error as Error).message}`,
+          `Batch of ${rows.length} row(s) failed (attempt ${attempt + 1}), retrying in ${delay / 1000}s: ${(error as Error).message}`,
         );
         await heartbeat(); // keep the group session alive while waiting
         await sleep(delay);
@@ -201,19 +232,20 @@ export abstract class BaseBatchConsumer<R>
     }
   }
 
-  // Isolates the row(s) the database refuses; the rest is still stored
-  private async saveOneByOne(
-    items: { message: KafkaMessage; row: R }[],
-  ): Promise<SaveResult> {
-    const result: SaveResult = { inserted: 0, poisoned: [] };
-    for (const { message, row } of items) {
+  // Isolates the message(s) whose rows the database refuses; the rest is
+  // still stored
+  private async saveOneByOne(items: Item<R>[]): Promise<SaveResult<S>> {
+    const result: SaveResult<S> = { saved: [], poisoned: [], errors: [] };
+    for (const item of items) {
       try {
-        result.inserted += await this.dataSource.transaction((em) =>
-          this.saveRows([row], em),
+        const saved = await this.dataSource.transaction((em) =>
+          this.saveRows(item.rows, em),
         );
+        result.saved.push(...saved);
       } catch (error) {
         if (!isDataError(error)) throw error;
-        result.poisoned.push({ message, error: error as Error });
+        result.poisoned.push(item);
+        result.errors.push({ message: item.message, error: error as Error });
       }
     }
     return result;

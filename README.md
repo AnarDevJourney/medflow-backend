@@ -112,7 +112,7 @@ Endpoints (prefix `/api/v1`, DOC 8.2):
 - Consumer group = service name. `./scripts/kafka-reset-group.sh <service> <topic>` replays a topic for one service.
 - End-to-end check (stops Kafka once): `./scripts/test-kafka.sh`.
 
-Published so far (`auth.events`, key = user id): `user.invited` (`resent: true` on resend-invite), `user.activated`, `user.updated` (`changedFields`), `user.deactivated`, `user.reactivated`, `user.session_revoked`, `user.password_reset_requested`, `user.password_changed` (`via: RESET | CHANGE`). Not in the DOC 5.6 catalog: `user.reactivated`, `changedFields`, `via`. Consumed by staff-service (log-only until phase 5) and notification-history (action history).
+Published so far (`auth.events`, key = user id): `user.invited` (`resent: true` on resend-invite), `user.activated`, `user.updated` (`changedFields`), `user.deactivated`, `user.reactivated`, `user.session_revoked`, `user.password_reset_requested`, `user.password_changed` (`via: RESET | CHANGE`). Not in the DOC 5.6 catalog: `user.reactivated`, `changedFields`, `via`. Consumed by staff-service (log-only until phase 5) and notification-history (action history + notifications).
 
 ## Action history
 
@@ -131,6 +131,23 @@ notification-history-service reads every domain topic and writes one row per eve
 | `GET /history/patients/:patientId` | ADMIN, DOCTOR, NURSE | patient timeline across services |
 | `GET /history/users/:userId` | ADMIN | what one staff member did |
 
+## Notifications (in-app + Socket.io)
+
+notification-history reads every domain topic a second time (group `notification-history-service.notifications`, independent of the history) and turns events into in-app notifications. A `NotificationMapper` template per event decides recipients and text (DOC 5.6 "in-app to …"); events without a template notify nobody. Today only `user.session_revoked` notifies (appointment, lab and invoice templates come with their phases).
+
+- Same batching as the history (`BaseBatchConsumer`): fetch ≤ `NOTIFICATION_BATCH_MAX_BYTES` (1 MB), one transaction per partition batch, `INSERT … ON CONFLICT (event_id, recipient_id) DO NOTHING RETURNING *` in chunks of 1000. Measured: 900 × 5 KB backlog → 7 transactions.
+- After the commit only the rows really inserted are pushed (`afterCommit`): a redelivered event is never pushed twice, a rolled-back row never. Events older than `NOTIFICATION_PUSH_MAX_AGE_SECONDS` (600; e.g. replayed after an outage) are stored and counted but not popped up.
+- Socket.io: the browser connects to `/socket.io` on the gateway (proxied here). The handshake checks the `access_token` cookie, the JWT (`JWT_ACCESS_SECRET`) and the Redis block-list — a failure arrives as `connect_error` with `err.data.code`. Rooms `user:<id>`, `role:<ROLE>`.
+- Server events: `notification` (new one), `notification:count` (`{ count }`, sent on connect and after every change — the server owns the badge), `session:expired` (token lifetime over → refresh the cookie and reconnect), `session:revoked` (deactivation / password change / refresh-token reuse → only sockets opened with older tokens are closed).
+- End-to-end check: `./scripts/test-notifications.sh` (uses `scripts/lib/socket-listen.mjs` as a Socket.io client).
+
+| Route | Who | Notes |
+|---|---|---|
+| `GET /notifications` | all | own only, `unread=true\|false`, `page`, `limit`, `sort=createdAt:asc\|desc` |
+| `GET /notifications/unread-count` | all | `{ count }` |
+| `PATCH /notifications/:id/read` | all | idempotent; someone else's → 404 |
+| `PATCH /notifications/read-all` | all | `{ updated }` |
+
 ## Build progress
 
 | Phase | Status |
@@ -139,7 +156,8 @@ notification-history-service reads every domain topic and writes one row per eve
 | 2 auth-service + gateway JWT (incl. all DOC 8.2 endpoints) | ✅ |
 | 3 libs/contracts + libs/kafka (outbox, poller, BaseConsumer, DLQ) | ✅ |
 | 4.1 notification-history: action history (batch consumer + `/history`) | ✅ |
-| 4.2 in-app notifications + Socket.io · 4.3 emails (BullMQ + Mailpit) | next |
+| 4.2 notification-history: in-app notifications + Socket.io | ✅ |
+| 4.3 emails (BullMQ + Mailpit) | next |
 | 5–12 staff, patient, appointment, medical-record, billing, file, frontend, demo seed | — |
 
 Phase 5 starts by replaying `auth.events` for staff-service (`./scripts/kafka-reset-group.sh staff-service auth.events`), so users created before it get their profiles.

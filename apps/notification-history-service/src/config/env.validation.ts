@@ -11,4 +11,16 @@ export const envValidationSchema = Joi.object({
     .integer()
     .min(64 * 1024)
     .default(1024 * 1024),
+  // Same for in-app notifications
+  NOTIFICATION_BATCH_MAX_BYTES: Joi.number()
+    .integer()
+    .min(64 * 1024)
+    .default(1024 * 1024),
+  // Older events (replayed after an outage) are stored but not pushed live
+  NOTIFICATION_PUSH_MAX_AGE_SECONDS: Joi.number().integer().min(1).default(600),
+  // Socket.io handshake: verify the access token + check the block-list
+  JWT_ACCESS_SECRET: Joi.string().min(32).required(),
+  REDIS_URL: Joi.string()
+    .uri({ scheme: ['redis', 'rediss'] })
+    .required(),
 });
