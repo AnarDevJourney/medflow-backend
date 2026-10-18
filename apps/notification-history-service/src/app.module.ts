@@ -4,6 +4,7 @@ import { createConfigModule, HealthModule, RedisModule } from '@medflow/common';
 import { DatabaseModule } from '@medflow/database';
 import { KafkaModule } from '@medflow/kafka';
 import { envValidationSchema } from './config/env.validation';
+import { EmailsModule } from './modules/emails/emails.module';
 import { HistoryModule } from './modules/history/history.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 
@@ -18,6 +19,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     HealthModule,
     HistoryModule,
     NotificationsModule,
+    EmailsModule,
   ],
 })
 export class AppModule {}

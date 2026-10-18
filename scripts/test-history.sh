@@ -23,10 +23,7 @@ waitfor() { # <seconds> <expected> <command…>: polls until the command prints 
   for _ in $(seq 1 $((t * 4))); do got=$("$@"); [ "$got" = "$want" ] && { echo "$got"; return; }; sleep 0.25; done
   echo "$got"
 }
-lastlink() { # waits until auth-service logged the invite link of $1
-  local t; for _ in $(seq 1 20); do
-    t=$($DC logs auth-service 2>&1 | grep "$1" | tail -1 | grep -o 'token=[A-Za-z0-9_-]*' | cut -d= -f2)
-    [ -n "$t" ] && { echo $t; return; }; sleep 0.2; done; echo "$t"; }
+source scripts/lib/mailpit.sh
 invite() { # email role → prints the user id
   code -b $D/a.jar -X POST $G/users -H 'content-type: application/json' \
     -d "{\"email\":\"$1\",\"firstName\":\"History\",\"lastName\":\"Test\",\"role\":\"$2\"}" >/dev/null
@@ -58,7 +55,7 @@ check "metadata keeps email + role" "$EMAIL|NURSE" "$(q notification_db "select 
 echo "== Redelivered event is not stored twice"
 SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 q auth_db "update outbox_events set published_at = null where id='$E1'" >/dev/null
-check "consumer reports the duplicate" 1 $(waitfor 6 1 sh -c "$DC logs --since $SINCE notification-history-service 2>&1 | grep -c '1 duplicate'")
+check "consumer reports the duplicate" 1 $(waitfor 6 1 sh -c "$DC logs --since $SINCE notification-history-service 2>&1 | grep ActionHistoryConsumer | grep -c '1 duplicate'")
 check "still one row" 1 $(hrows $E1)
 
 echo "== Password reset request stays out of the history"
@@ -98,7 +95,7 @@ check "bad eventType → 400" 400 $(code -b $D/a.jar "$G/history?eventType=DROP%
 check "no cookie → 401" 401 $(code "$G/history")
 
 echo "== Roles (nurse)"
-INV=$(lastlink "Invite link for $EMAIL")
+INV=$(mailtoken $EMAIL invited)
 check "nurse accepts the invite" 200 $(code -c $D/n.jar -X POST $G/auth/accept-invite -H 'content-type: application/json' -d "{\"token\":\"$INV\",\"password\":\"Secret123\"}")
 check "nurse: global feed → 403" 403 $(code -b $D/n.jar "$G/history")
 check "nurse: user history → 403" 403 $(code -b $D/n.jar "$G/history/users/$ADMIN_ID")

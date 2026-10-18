@@ -22,10 +22,6 @@ export const envValidationSchema = Joi.object({
   // http://localhost, so the Docker stack works either way.
   COOKIE_SECURE: Joi.boolean(),
 
-  // Log invite / reset links (no emails before phase 4). Defaults to true
-  // outside production. TODO(phase 4): drop once notification-history sends emails.
-  LOG_AUTH_LINKS: Joi.boolean(),
-
   // Optional first admin, created on startup if the email does not exist yet
   SEED_ADMIN_EMAIL: Joi.string().email(),
   SEED_ADMIN_PASSWORD: Joi.string().min(8).when('SEED_ADMIN_EMAIL', {

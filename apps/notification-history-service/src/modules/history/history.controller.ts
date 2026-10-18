@@ -8,8 +8,8 @@ import {
 } from './dto/history-query.dto';
 import { HistoryService } from './history.service';
 
-// Action history / audit log (DOC 8.9). /history/emails comes with the
-// email part of phase 4.
+// Action history / audit log (DOC 8.9). /history/emails lives in
+// EmailLogsController.
 @ApiTags('history')
 @Controller('history')
 export class HistoryController {

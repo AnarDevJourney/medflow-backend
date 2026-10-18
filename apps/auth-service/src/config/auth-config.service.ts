@@ -38,12 +38,6 @@ export class AuthConfigService {
     return value === true || value === 'true';
   }
 
-  get logAuthLinks(): boolean {
-    const value = this.config.get<boolean | string>('LOG_AUTH_LINKS');
-    if (value === undefined) return !this.isProduction;
-    return value === true || value === 'true';
-  }
-
   get seedAdmin(): { email: string; password: string } | null {
     const email = this.config.get<string>('SEED_ADMIN_EMAIL');
     const password = this.config.get<string>('SEED_ADMIN_PASSWORD');

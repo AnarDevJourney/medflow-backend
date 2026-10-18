@@ -87,7 +87,7 @@ Their data volumes are separate (`medflow_*` vs `medflow-dev_*`).
   - deactivation, password reset, refresh-token reuse → `auth:revoked-before:<userId>` (all older tokens)
 - Rate limit (Redis, per IP): 10/min on login + forgot-password + change-password, 100/min elsewhere.
 - First admin is seeded from `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` (dev: `admin@medflow.az` / `Admin12345`).
-- No emails yet (phase 4): invite and reset links are printed in the auth-service log (`LOG_AUTH_LINKS`).
+- Invite and reset links travel only by email (notification-history → Mailpit in dev, http://localhost:8025); they are never logged.
 - End-to-end check against the Docker stack: `./scripts/test-auth.sh`.
 
 Endpoints (prefix `/api/v1`, DOC 8.2):
@@ -112,7 +112,7 @@ Endpoints (prefix `/api/v1`, DOC 8.2):
 - Consumer group = service name. `./scripts/kafka-reset-group.sh <service> <topic>` replays a topic for one service.
 - End-to-end check (stops Kafka once): `./scripts/test-kafka.sh`.
 
-Published so far (`auth.events`, key = user id): `user.invited` (`resent: true` on resend-invite), `user.activated`, `user.updated` (`changedFields`), `user.deactivated`, `user.reactivated`, `user.session_revoked`, `user.password_reset_requested`, `user.password_changed` (`via: RESET | CHANGE`). Not in the DOC 5.6 catalog: `user.reactivated`, `changedFields`, `via`. Consumed by staff-service (log-only until phase 5) and notification-history (action history + notifications).
+Published so far (`auth.events`, key = user id): `user.invited` (`resent: true` on resend-invite), `user.activated`, `user.updated` (`changedFields`), `user.deactivated`, `user.reactivated`, `user.session_revoked` (`email`, `firstName`), `user.password_reset_requested`, `user.password_changed` (`via: RESET | CHANGE`). Not in the DOC 5.6 catalog: `user.reactivated`, `changedFields`, `via`, `email`/`firstName` on `user.session_revoked`. Consumed by staff-service (log-only until phase 5) and notification-history (action history, notifications, emails).
 
 ## Action history
 
@@ -148,6 +148,25 @@ notification-history reads every domain topic a second time (group `notification
 | `PATCH /notifications/:id/read` | all | idempotent; someone else's → 404 |
 | `PATCH /notifications/read-all` | all | `{ updated }` |
 
+## Emails (BullMQ + Mailpit)
+
+A third consumer group (`notification-history-service.emails`) turns events into emails in two steps:
+
+1. **Kafka side** (same pattern as history / notifications): an `EmailMapper` template per event → `email_logs` rows (`QUEUED`) for the whole fetch (≤ `EMAIL_BATCH_MAX_BYTES`, 1 MB) in one transaction, `ON CONFLICT (event_id, template, recipient_email) DO NOTHING`.
+2. **BullMQ side**: after the commit (before the offset commit) one job per email on the `email` queue; `EmailWorker` renders the Handlebars template (HTML + text, Asia/Baku times), sends it with Nodemailer and sets `SENT` / `FAILED`. 3 attempts with exponential backoff (5 s, 10 s), `EMAIL_CONCURRENCY` (5) and `EMAIL_RATE_LIMIT_PER_SECOND` (10).
+
+Why the split: a DB insert can be rolled back and repeated harmlessly, a sent email cannot — emails need their own status and retry per message, and a slow or dead SMTP server must never hold Kafka back.
+
+- Duplicates: jobId = hash of the unique key, the worker skips rows that are not `QUEUED`; every stored row is enqueued again on redelivery, so a crash between the commit and the enqueue loses nothing. Redis down → the batch is redelivered later. `Message-ID` = `email_logs.id`.
+- Links with a raw token live only in the event and the job (finished jobs are removed at once, failed ones after 7 days); `email_logs` has no body.
+- An email whose link expired (invite 72 h, reset 1 h) or a security notice more than 24 h late (e.g. replayed after an outage) is not sent: `FAILED`, "Expired before it could be sent".
+- Templates today: `staff-invite`, `password-reset`, `password-changed`, `session-revoked`.
+- End-to-end check (pauses Mailpit and Redis briefly): `./scripts/test-emails.sh`. All scripts read invite/reset links from Mailpit (`scripts/lib/mailpit.sh`).
+
+| Route | Who | Notes |
+|---|---|---|
+| `GET /history/emails` | ADMIN | `status`, `template`, `recipient` (part of the address), `from`, `to`, `page`, `limit`, `sort=createdAt\|sentAt:asc\|desc` |
+
 ## Build progress
 
 | Phase | Status |
@@ -157,8 +176,9 @@ notification-history reads every domain topic a second time (group `notification
 | 3 libs/contracts + libs/kafka (outbox, poller, BaseConsumer, DLQ) | ✅ |
 | 4.1 notification-history: action history (batch consumer + `/history`) | ✅ |
 | 4.2 notification-history: in-app notifications + Socket.io | ✅ |
-| 4.3 emails (BullMQ + Mailpit) | next |
-| 5–12 staff, patient, appointment, medical-record, billing, file, frontend, demo seed | — |
+| 4.3 notification-history: emails (BullMQ + Mailpit, `/history/emails`) | ✅ |
+| 5 staff-service | next |
+| 6–12 patient, appointment, medical-record, billing, file, frontend, demo seed | — |
 
 Phase 5 starts by replaying `auth.events` for staff-service (`./scripts/kafka-reset-group.sh staff-service auth.events`), so users created before it get their profiles.
 

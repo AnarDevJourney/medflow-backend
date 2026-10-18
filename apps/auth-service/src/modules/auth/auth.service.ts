@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
@@ -70,7 +70,6 @@ const invalidResetToken = () =>
 
 @Injectable()
 export class AuthService {
-  private readonly logger = new Logger(AuthService.name);
   // Compared against when the email does not exist, so a wrong email takes
   // as long as a wrong password (no account enumeration by timing)
   private readonly dummyHash = hashPasswordSync(randomUUID());
@@ -309,11 +308,6 @@ export class AuthService {
         },
       });
     });
-
-    if (this.config.logAuthLinks) {
-      // TODO(phase 4): the reset email replaces this log line
-      this.logger.log(`Password reset link for ${user.email}: ${link}`);
-    }
   }
 
   // DOC 3.5: new password, token used, every session of the user revoked

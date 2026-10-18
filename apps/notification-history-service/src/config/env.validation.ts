@@ -20,7 +20,21 @@ export const envValidationSchema = Joi.object({
   NOTIFICATION_PUSH_MAX_AGE_SECONDS: Joi.number().integer().min(1).default(600),
   // Socket.io handshake: verify the access token + check the block-list
   JWT_ACCESS_SECRET: Joi.string().min(32).required(),
+  // Socket.io block-list + BullMQ email queue
   REDIS_URL: Joi.string()
     .uri({ scheme: ['redis', 'rediss'] })
     .required(),
+
+  // Emails (phase 4.3): Kafka batch → email_logs, then BullMQ → SMTP
+  EMAIL_BATCH_MAX_BYTES: Joi.number()
+    .integer()
+    .min(64 * 1024)
+    .default(1024 * 1024),
+  EMAIL_CONCURRENCY: Joi.number().integer().min(1).default(5),
+  EMAIL_RATE_LIMIT_PER_SECOND: Joi.number().integer().min(1).default(10),
+  SMTP_HOST: Joi.string().required(),
+  SMTP_PORT: Joi.number().port().required(),
+  SMTP_USER: Joi.string().allow(''),
+  SMTP_PASS: Joi.string().allow(''),
+  SMTP_FROM: Joi.string().default('MedFlow <no-reply@medflow.az>'),
 });

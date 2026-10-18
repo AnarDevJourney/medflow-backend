@@ -145,12 +145,21 @@ export class SessionsService {
         { familyId, revokedAt: IsNull() },
         { revokedAt: new Date() },
       );
+      // email + name travel with the event, so the security email needs no
+      // call back to auth (fat event, DOC 5.6)
+      const user = await em.findOneByOrFail(User, { id: userId });
       await this.outbox.add(em, {
         eventType: 'user.session_revoked',
         aggregateType: 'USER',
         aggregateId: userId,
         actor: null,
-        payload: { userId, familyId, reason: 'REFRESH_TOKEN_REUSE' },
+        payload: {
+          userId,
+          email: user.email,
+          firstName: user.firstName,
+          familyId,
+          reason: 'REFRESH_TOKEN_REUSE',
+        },
       });
     });
   }

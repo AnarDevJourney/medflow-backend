@@ -1,7 +1,7 @@
 #!/bin/bash
 # End-to-end checks of auth-service (docx 3.1–3.6 + 8.2) through the gateway.
 # Needs the Docker stack: ./scripts/run-all.sh, then ./scripts/test-auth.sh
-# Reads invite/reset links from the auth-service logs (LOG_AUTH_LINKS=true).
+# Reads invite/reset links from the emails in Mailpit (scripts/lib/mailpit.sh).
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 G=http://localhost:3000/api/v1
 D=$(mktemp -d)
@@ -16,10 +16,7 @@ json() { curl -s "$@"; }
 login() { code -c $1 -X POST $G/auth/login -H 'content-type: application/json' -d "{\"email\":\"$2\",\"password\":\"$3\"}"; }
 psql() { $DC exec -T postgres psql -U medflow -d auth_db -tAc "$1"; }
 redis_flush_rl() { $DC exec -T redis sh -c "redis-cli --scan --pattern 'ratelimit:*' | xargs -r redis-cli del" >/dev/null; }
-lastlink() { # waits until a link different from $2 shows up (docker logs lag a bit)
-  local t; for _ in $(seq 1 20); do
-    t=$($DC logs auth-service 2>&1 | grep "$1" | tail -1 | grep -o 'token=[A-Za-z0-9_-]*' | cut -d= -f2)
-    [ -n "$t" ] && [ "$t" != "$2" ] && { echo $t; return; }; sleep 0.2; done; echo "$t"; }
+source scripts/lib/mailpit.sh
 # The stack may still be starting: wait until the gateway reports all green
 for _ in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 $G/health)" = 200 ] && break; sleep 1; done
 SUF=$RANDOM
@@ -58,7 +55,7 @@ DOC_ID=$(grep -o '"id":"[^"]*"' $D/body | head -1 | cut -d'"' -f4)
 check "duplicate email" 409 $(code -b $D/a.jar -X POST $G/users -H 'content-type: application/json' -d "{\"email\":\"$EMAIL\",\"firstName\":\"A\",\"lastName\":\"B\",\"role\":\"DOCTOR\"}")
 check "invalid role → 400" 400 $(code -b $D/a.jar -X POST $G/users -H 'content-type: application/json' -d '{"email":"x@y.az","firstName":"A","lastName":"B","role":"GOD"}')
 check "invited user cannot log in" 401 $(login $D/x.jar $EMAIL Secret123)
-INV=$(lastlink "Invite link for $EMAIL")
+INV=$(mailtoken $EMAIL invited)
 check "invitation preview" 200 $(code $G/auth/invitations/$INV)
 check "weak password rejected" 400 $(code -X POST $G/auth/accept-invite -H 'content-type: application/json' -d "{\"token\":\"$INV\",\"password\":\"onlyletters\"}")
 check "accept invite (logged in)" 200 $(code -c $D/d.jar -X POST $G/auth/accept-invite -H 'content-type: application/json' -d "{\"token\":\"$INV\",\"password\":\"Secret123\"}")
@@ -72,12 +69,12 @@ echo "== Expired invite / resend"
 E2="nurse$SUF@medflow.az"
 code -b $D/a.jar -X POST $G/users -H 'content-type: application/json' -d "{\"email\":\"$E2\",\"firstName\":\"Leyla\",\"lastName\":\"Əliyeva\",\"role\":\"NURSE\"}" >/dev/null
 NURSE_ID=$(grep -o '"id":"[^"]*"' $D/body | head -1 | cut -d'"' -f4)
-INV2=$(lastlink "Invite link for $E2")
+INV2=$(mailtoken $E2 invited)
 psql "update invitations set expires_at = now() - interval '1 minute' where user_id='$NURSE_ID'" >/dev/null
 check "expired invite → 410" 410 $(code $G/auth/invitations/$INV2)
 check "resend invite" 200 $(code -b $D/a.jar -X POST $G/users/$NURSE_ID/resend-invite)
 check "old link invalid after resend" 404 $(code $G/auth/invitations/$INV2)
-INV3=$(lastlink "Invite link for $E2" "$INV2")
+INV3=$(mailtoken $E2 invited "$INV2")
 check "new link works" 200 $(code $G/auth/invitations/$INV3)
 
 echo "== Deactivation locks the user out instantly"
@@ -159,11 +156,12 @@ check "password_changed via CHANGE" 1 $(psql "select count(*) from outbox_events
 redis_flush_rl
 
 echo "== Forgot / reset password"
+PREV_RST=$(lasttoken admin@medflow.az Reset) # reset emails of earlier runs
 check "forgot (existing)" 200 $(code -X POST $G/auth/forgot-password -H 'content-type: application/json' -d '{"email":"admin@medflow.az"}')
 B1=$(cat $D/body)
 check "forgot (unknown) same answer" 200 $(code -X POST $G/auth/forgot-password -H 'content-type: application/json' -d '{"email":"nobody@medflow.az"}')
 [ "$B1" = "$(cat $D/body)" ] && check "identical bodies" ok ok || check "identical bodies" ok diff
-RST=$(lastlink "Password reset link for admin@medflow.az")
+RST=$(mailtoken admin@medflow.az Reset "$PREV_RST")
 check "second admin session" 200 $(login $D/c.jar admin@medflow.az Admin12345)
 check "reset password" 200 $(code -X POST $G/auth/reset-password -H 'content-type: application/json' -d "{\"token\":\"$RST\",\"password\":\"NewAdmin123\"}")
 check "old session access → 401" 401 $(code -b $D/c.jar $G/auth/me)
@@ -174,7 +172,7 @@ check "new password → 200" 200 $(login $D/a.jar admin@medflow.az NewAdmin123)
 # put the demo password back (strict limit is shared by login + forgot)
 redis_flush_rl
 code -X POST $G/auth/forgot-password -H 'content-type: application/json' -d '{"email":"admin@medflow.az"}' >/dev/null
-RST2=$(lastlink "Password reset link for admin@medflow.az" "$RST")
+RST2=$(mailtoken admin@medflow.az Reset "$RST")
 check "restore demo password" 200 $(code -X POST $G/auth/reset-password -H 'content-type: application/json' -d "{\"token\":\"$RST2\",\"password\":\"Admin12345\"}")
 
 echo "== Security checklist"

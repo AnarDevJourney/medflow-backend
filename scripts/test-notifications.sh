@@ -27,10 +27,7 @@ waitfor() { # <seconds> <expected> <command…>: polls until the command prints 
   for _ in $(seq 1 $((t * 4))); do got=$("$@"); [ "$got" = "$want" ] && { echo "$got"; return; }; sleep 0.25; done
   echo "$got"
 }
-lastlink() { # waits until auth-service logged the invite link of $1
-  local t; for _ in $(seq 1 20); do
-    t=$($DC logs auth-service 2>&1 | grep "$1" | tail -1 | grep -o 'token=[A-Za-z0-9_-]*' | cut -d= -f2)
-    [ -n "$t" ] && { echo $t; return; }; sleep 0.2; done; echo "$t"; }
+source scripts/lib/mailpit.sh
 # listen <token|-> <seconds> <file>: Socket.io client in the background, one JSON line per event
 listen() { node scripts/lib/socket-listen.mjs http://localhost:3000 "$1" "$2" >"$3" 2>&1 & }
 ev() { grep -c "\"name\":\"$2\"" $1; } # how many <event> a listener received
@@ -51,7 +48,7 @@ echo "== Setup: a doctor with a live session"
 EMAIL="notif$SUF@medflow.az"
 check "invite doctor" 201 $(code -b $D/a.jar -X POST $G/users -H 'content-type: application/json' -d "{\"email\":\"$EMAIL\",\"firstName\":\"Notif\",\"lastName\":\"Test\",\"role\":\"DOCTOR\"}")
 U=$(grep -o '"id":"[^"]*"' $D/body | head -1 | cut -d'"' -f4)
-INV=$(lastlink "Invite link for $EMAIL")
+INV=$(mailtoken $EMAIL invited)
 check "doctor accepts the invite" 200 $(code -c $D/d.jar -X POST $G/auth/accept-invite -H 'content-type: application/json' -d "{\"token\":\"$INV\",\"password\":\"Secret123\"}")
 A1=$(tok $D/d.jar access_token); R1=$(tok $D/d.jar refresh_token)
 

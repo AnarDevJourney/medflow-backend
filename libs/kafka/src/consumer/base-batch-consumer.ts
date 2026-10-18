@@ -36,9 +36,9 @@ interface Item<R> {
   rows: R[];
 }
 
-interface SaveResult<S> {
+interface SaveResult<R, S> {
   saved: S[];
-  poisoned: Item<unknown>[];
+  poisoned: Item<R>[];
   errors: Rejected[];
 }
 
@@ -69,7 +69,9 @@ interface SaveResult<S> {
 // - anything else (database down) → retried 1 s, 5 s, 15 s; then thrown:
 //   KafkaJS restarts the consumer and refetches from the last committed
 //   offset, nothing is dead-lettered for an outage
-// - afterCommit throws → logged only; the rows are already stored
+// - afterCommit throws → the offset is not committed and the batch is
+//   redelivered (rows come back as duplicates, afterCommit runs again), so
+//   e.g. an email job is never lost while Redis is down
 export abstract class BaseBatchConsumer<R, S = unknown>
   implements OnApplicationBootstrap, BeforeApplicationShutdown
 {
@@ -96,11 +98,18 @@ export abstract class BaseBatchConsumer<R, S = unknown>
   // exist (redelivery). Returns the rows really inserted (RETURNING).
   protected abstract saveRows(rows: R[], em: EntityManager): Promise<S[]>;
 
-  // After the transaction committed: `saved` = the new rows only (never a
-  // duplicate, never a rolled-back row), `events` = every event of the batch
-  protected afterCommit(saved: S[], events: EventEnvelope[]): Promise<void> {
+  // After the transaction committed, before the offset is committed:
+  // `saved` = the new rows only (never a duplicate, never a rolled-back row),
+  // `events` = every event of the batch, `rows` = every stored row of the
+  // batch, duplicates included (all of them exist in the database now)
+  protected afterCommit(
+    saved: S[],
+    events: EventEnvelope[],
+    rows: R[],
+  ): Promise<void> {
     void saved;
     void events;
+    void rows;
     return Promise.resolve();
   }
 
@@ -157,19 +166,28 @@ export abstract class BaseBatchConsumer<R, S = unknown>
 
     const total = items.reduce((sum, item) => sum + item.rows.length, 0);
     let saved: S[] = [];
-    let poisonedRows = 0;
+    let stored = items;
     if (items.length > 0) {
       const result = await this.save(items, () => payload.heartbeat());
       saved = result.saved;
-      poisonedRows = result.poisoned.reduce((n, i) => n + i.rows.length, 0);
+      stored = items.filter((item) => !result.poisoned.includes(item));
       rejected.push(...result.errors);
     }
+    const poisonedRows =
+      total - stored.reduce((sum, item) => sum + item.rows.length, 0);
 
     if (events.length > 0) {
       try {
-        await this.afterCommit(saved, events);
+        await this.afterCommit(
+          saved,
+          events,
+          stored.flatMap((item) => item.rows),
+        );
       } catch (error) {
-        this.logger.error(`afterCommit failed: ${(error as Error).message}`);
+        this.logger.error(
+          `afterCommit failed, ${topic}[${partition}] will be redelivered: ${(error as Error).message}`,
+        );
+        throw error;
       }
     }
     for (const { message, error } of rejected) {
@@ -206,7 +224,7 @@ export abstract class BaseBatchConsumer<R, S = unknown>
   private async save(
     items: Item<R>[],
     heartbeat: () => Promise<void>,
-  ): Promise<SaveResult<S>> {
+  ): Promise<SaveResult<R, S>> {
     const rows = items.flatMap((item) => item.rows);
     for (let attempt = 0; ; attempt++) {
       try {
@@ -234,8 +252,8 @@ export abstract class BaseBatchConsumer<R, S = unknown>
 
   // Isolates the message(s) whose rows the database refuses; the rest is
   // still stored
-  private async saveOneByOne(items: Item<R>[]): Promise<SaveResult<S>> {
-    const result: SaveResult<S> = { saved: [], poisoned: [], errors: [] };
+  private async saveOneByOne(items: Item<R>[]): Promise<SaveResult<R, S>> {
+    const result: SaveResult<R, S> = { saved: [], poisoned: [], errors: [] };
     for (const item of items) {
       try {
         const saved = await this.dataSource.transaction((em) =>

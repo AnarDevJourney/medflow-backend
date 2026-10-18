@@ -97,9 +97,6 @@ services:
       # Demo admin — TODO(prod): real credentials or remove after first login
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@medflow.az}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-Admin12345}
-      # No emails before phase 4, so invite/reset links are logged.
-      # TODO(phase 4): remove once notification-history sends the emails.
-      LOG_AUTH_LINKS: 'true'
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy } # block-list + outbox poller (BullMQ)
@@ -194,9 +191,14 @@ services:
       NOTIFICATION_BATCH_MAX_BYTES: 1048576 # 1 MB per notifications batch
       NOTIFICATION_PUSH_MAX_AGE_SECONDS: 600 # older events: stored, not pushed live
       JWT_ACCESS_SECRET: *jwt-secret # Socket.io handshake
-      # TODO(phase 4.3): SMTP_HOST=mailpit, SMTP_PORT=1025, SMTP_FROM;
-      #   depends_on mailpit
+      EMAIL_BATCH_MAX_BYTES: 1048576
+      EMAIL_CONCURRENCY: 5
+      EMAIL_RATE_LIMIT_PER_SECOND: 10
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_FROM: MedFlow <no-reply@medflow.az>
     depends_on:
       postgres: { condition: service_healthy }
-      redis: { condition: service_healthy } # token block-list
+      redis: { condition: service_healthy } # token block-list + email queue
+      mailpit: { condition: service_healthy } # SMTP
       kafka-init: { condition: service_completed_successfully } # consumes every topic

@@ -65,6 +65,8 @@ export interface UserReactivatedPayload {
 // notification: security email + in-app message
 export interface UserSessionRevokedPayload {
   userId: string;
+  email: string;
+  firstName: string;
   familyId: string;
   reason: 'REFRESH_TOKEN_REUSE';
 }

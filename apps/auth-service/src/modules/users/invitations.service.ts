@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import { EntityManager, IsNull } from 'typeorm';
 import { AppException, ErrorCode } from '@medflow/common';
 import { generateToken, sha256 } from '../../common/crypto.util';
@@ -22,8 +22,6 @@ export interface PendingInvitation {
 // Invite tokens (DOC 3.3): 72 h, single use, only the sha256 is stored
 @Injectable()
 export class InvitationsService {
-  private readonly logger = new Logger(InvitationsService.name);
-
   constructor(private readonly config: AuthConfigService) {}
 
   // Replaces any pending invitation of the user (resend invalidates the old link)
@@ -43,11 +41,8 @@ export class InvitationsService {
       createdBy,
     });
 
+    // Sent by notification-history (staff-invite email), never logged
     const link = `${this.config.frontendUrl}/accept-invite?token=${token}`;
-    if (this.config.logAuthLinks) {
-      // TODO(phase 4): the invite email replaces this log line
-      this.logger.log(`Invite link for ${user.email}: ${link}`);
-    }
     return { link, expiresAt };
   }
 
