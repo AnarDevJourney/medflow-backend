@@ -190,5 +190,9 @@ services:
       <<: *common-env
       PORT: 3008
       DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/notification_db
-      # TODO(phase 4): SMTP_HOST=mailpit, SMTP_PORT=1025, SMTP_FROM;
+      HISTORY_BATCH_MAX_BYTES: 1048576 # 1 MB per action-history batch
+      # TODO(phase 4.3): SMTP_HOST=mailpit, SMTP_PORT=1025, SMTP_FROM;
       #   depends_on redis (email queue) + mailpit
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully } # consumes every topic

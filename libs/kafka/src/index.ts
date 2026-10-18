@@ -1,3 +1,4 @@
+export * from './consumer/base-batch-consumer';
 export * from './consumer/base-consumer';
 export * from './consumer/consumer.module';
 export * from './consumer/processed-event.entity';

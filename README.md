@@ -112,7 +112,24 @@ Endpoints (prefix `/api/v1`, DOC 8.2):
 - Consumer group = service name. `./scripts/kafka-reset-group.sh <service> <topic>` replays a topic for one service.
 - End-to-end check (stops Kafka once): `./scripts/test-kafka.sh`.
 
-Published so far (`auth.events`, key = user id): `user.invited` (`resent: true` on resend-invite), `user.activated`, `user.updated` (`changedFields`), `user.deactivated`, `user.reactivated`, `user.session_revoked`, `user.password_reset_requested`, `user.password_changed` (`via: RESET | CHANGE`). Not in the DOC 5.6 catalog: `user.reactivated`, `changedFields`, `via`. Consumed by staff-service (log-only until phase 5).
+Published so far (`auth.events`, key = user id): `user.invited` (`resent: true` on resend-invite), `user.activated`, `user.updated` (`changedFields`), `user.deactivated`, `user.reactivated`, `user.session_revoked`, `user.password_reset_requested`, `user.password_changed` (`via: RESET | CHANGE`). Not in the DOC 5.6 catalog: `user.reactivated`, `changedFields`, `via`. Consumed by staff-service (log-only until phase 5) and notification-history (action history).
+
+## Action history
+
+notification-history-service reads every domain topic and writes one row per event to `action_history` (append-only: a trigger rejects UPDATE/DELETE). A `HistoryMapper` template per event type builds the summary (never clinical values, never invite/reset links); actor, time and correlation id come from the envelope. `user.password_reset_requested` is not recorded.
+
+- High volume, so `ActionHistoryConsumer` extends `BaseBatchConsumer` (`libs/kafka`) instead of `BaseConsumer`: one Kafka fetch holds at most `HISTORY_BATCH_MAX_BYTES` (1 MB). The broker answers as soon as anything is there (`minBytes: 1`) — it never waits for the megabyte to fill — and under load a fetch carries up to 1 MB. Each partition's part of the fetch is stored with one multi-row `INSERT … ON CONFLICT (event_id) DO NOTHING` in one transaction, then the offset is committed. Measured: a backlog of 900 × 5 KB events → 7 transactions.
+- No `processed_events`: the unique `event_id` is the idempotency key.
+- Failures: a message that is not an envelope or has no template → `dead-letter.events`; a row the database rejects (data error) → the batch is retried row by row and only that row is dead-lettered; database down → retried 1 s / 5 s / 15 s, then KafkaJS restarts the consumer from the last committed offset (nothing dead-lettered).
+- Consumer group `notification-history-service.action-history`, so the in-app notifications (phase 4.2, same topics) keep their own offsets.
+- End-to-end check: `./scripts/test-history.sh`.
+
+| Route | Who | Notes |
+|---|---|---|
+| `GET /history` | ADMIN | global feed: `eventType`, `actorId`, `entityType`, `from`, `to`, `page`, `limit`, `sort=occurredAt:asc\|desc` |
+| `GET /history/entity/:entityType/:entityId` | ADMIN, DOCTOR, NURSE, ACCOUNTANT | one user / appointment / invoice / lab order |
+| `GET /history/patients/:patientId` | ADMIN, DOCTOR, NURSE | patient timeline across services |
+| `GET /history/users/:userId` | ADMIN | what one staff member did |
 
 ## Build progress
 
@@ -121,7 +138,8 @@ Published so far (`auth.events`, key = user id): `user.invited` (`resent: true` 
 | 1 Skeleton, libs/common, libs/database, infra, gateway proxy + health | ✅ |
 | 2 auth-service + gateway JWT (incl. all DOC 8.2 endpoints) | ✅ |
 | 3 libs/contracts + libs/kafka (outbox, poller, BaseConsumer, DLQ) | ✅ |
-| 4 notification-history-service | next |
+| 4.1 notification-history: action history (batch consumer + `/history`) | ✅ |
+| 4.2 in-app notifications + Socket.io · 4.3 emails (BullMQ + Mailpit) | next |
 | 5–12 staff, patient, appointment, medical-record, billing, file, frontend, demo seed | — |
 
 Phase 5 starts by replaying `auth.events` for staff-service (`./scripts/kafka-reset-group.sh staff-service auth.events`), so users created before it get their profiles.

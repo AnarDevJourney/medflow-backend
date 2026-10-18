@@ -15,12 +15,10 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { DataSource, EntityManager } from 'typeorm';
 import { requestContext } from '@medflow/common';
 import {
-  DeadLetter,
   DomainEvent,
   EventEnvelope,
   EventType,
   Topic,
-  Topics,
 } from '@medflow/contracts';
 import {
   KAFKA_CLIENT,
@@ -28,6 +26,7 @@ import {
   KAFKA_PRODUCER,
   type KafkaModuleOptions,
 } from '../kafka.constants';
+import { parseEnvelope, sendToDeadLetter } from './dead-letter';
 import { ProcessedEvent } from './processed-event.entity';
 
 // Only the events a consumer cares about; the rest are skipped
@@ -38,11 +37,7 @@ export type EventHandlers = {
   ) => Promise<void>;
 };
 
-const RETRY_DELAYS_MS = [1000, 5000, 15000];
-
-// Message that can never succeed (not JSON, not an envelope) → straight to
-// the dead letters, no retries
-class InvalidMessageError extends Error {}
+export const RETRY_DELAYS_MS = [1000, 5000, 15000];
 
 // Base class of every Kafka consumer (DOC 5.4, 5.5). A subclass names its
 // topic and handlers:
@@ -65,8 +60,8 @@ export abstract class BaseConsumer
 {
   protected abstract readonly topic: Topic;
   protected abstract readonly handlers: EventHandlers;
-  // false: the handler is idempotent by itself (notification-history's
-  // unique event_id columns) and no processed_events row is written
+  // false: the handler is idempotent by itself (e.g. a unique event_id
+  // column) and no processed_events row is written
   protected readonly useProcessedEvents: boolean = true;
 
   @Inject(KAFKA_CLIENT) private readonly kafka: Kafka;
@@ -164,51 +159,20 @@ export abstract class BaseConsumer
     });
   }
 
-  private async deadLetter(
+  private deadLetter(
     topic: string,
     partition: number,
     message: KafkaMessage,
     error: Error,
   ): Promise<void> {
-    const letter: DeadLetter = {
-      originalTopic: topic,
+    return sendToDeadLetter(
+      this.producer,
+      this.options.serviceName,
+      this.logger,
+      topic,
       partition,
-      offset: message.offset,
-      key: message.key?.toString() ?? null,
-      value: message.value?.toString() ?? null,
-      error: error.message,
-      failedBy: this.options.serviceName,
-      failedAt: new Date().toISOString(),
-    };
-    // If this send fails too, the error propagates: the offset is not
-    // committed and KafkaJS redelivers the message later
-    await this.producer.send({
-      topic: Topics.DEAD_LETTER,
-      messages: [{ key: letter.key, value: JSON.stringify(letter) }],
-    });
-    const kind =
-      error instanceof InvalidMessageError ? 'Invalid message' : 'Message';
-    this.logger.error(
-      `${kind} at ${topic}[${partition}]@${message.offset} moved to ${Topics.DEAD_LETTER}: ${error.message}`,
+      message,
+      error,
     );
   }
-}
-
-function parseEnvelope(message: KafkaMessage): EventEnvelope {
-  let value: unknown;
-  try {
-    value = JSON.parse(message.value?.toString() ?? '');
-  } catch {
-    throw new InvalidMessageError('Message is not valid JSON');
-  }
-  const envelope = value as Partial<EventEnvelope> | null;
-  if (
-    typeof envelope?.eventId !== 'string' ||
-    typeof envelope.eventType !== 'string' ||
-    typeof envelope.payload !== 'object' ||
-    envelope.payload === null
-  ) {
-    throw new InvalidMessageError('Message is not an event envelope');
-  }
-  return envelope as EventEnvelope;
 }
