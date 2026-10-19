@@ -5,8 +5,9 @@ import { DatabaseModule } from '@medflow/database';
 import { envValidationSchema } from './config/env.validation';
 import { SidebarSettingsModule } from './modules/sidebar-settings/sidebar-settings.module';
 import { TableSettingsModule } from './modules/table-settings/table-settings.module';
+import { ThemeSettingsModule } from './modules/theme-settings/theme-settings.module';
 
-// Per-user UI configuration: sidebar and table settings. Holds no
+// Per-user UI configuration: sidebar, table and theme settings. Holds no
 // domain data, so it neither publishes nor consumes Kafka events.
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { TableSettingsModule } from './modules/table-settings/table-settings.mod
     HealthModule,
     SidebarSettingsModule,
     TableSettingsModule,
+    ThemeSettingsModule,
   ],
 })
 export class AppModule {}

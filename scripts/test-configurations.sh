@@ -1,9 +1,9 @@
 #!/bin/bash
-# End-to-end checks of configurations-service (sidebar + table settings)
+# End-to-end checks of configurations-service (sidebar, table and theme settings)
 # through the gateway: defaults, partial upserts, validation, atomic
 # page-visit counters, per-user isolation, table reset.
 # Needs the Docker stack: ./scripts/run-all.sh, then ./scripts/test-configurations.sh
-# Deletes the sidebar_settings / table_settings rows of the dev admin and of
+# Deletes the sidebar / table / theme settings rows of the dev admin and of
 # a throw-away user.
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 G=http://localhost:3000/api/v1/configurations/sidebar
@@ -128,6 +128,30 @@ q "insert into table_settings (user_id, table_key) select '$ADMIN', 't' || i fro
 check "201st table → 422 BUSINESS_RULE" '422|"BUSINESS_RULE"' "$(tpatch one-too-many '{"density":"compact"}')|$(j .error.code)"
 check "  existing table still updatable" 200 "$(tpatch invoices '{"density":"compact"}')"
 q "delete from table_settings where user_id='$ADMIN'" >/dev/null
+
+echo "Theme settings"
+TH=http://localhost:3000/api/v1/configurations/theme
+thpatch() { as_admin -X PATCH $TH -H 'content-type: application/json' -d "$1"; }
+q "delete from theme_settings where user_id='$ADMIN'" >/dev/null
+check "GET → defaults" '200|{"mode":null,"palette":null,"primaryColor":null,"sidebarStyle":null,"density":null,"motion":null,"updatedAt":null}' "$(as_admin $TH)|$(j .)"
+check "  GET creates no row" 0 "$(q "select count(*) from theme_settings where user_id='$ADMIN'")"
+check "PATCH mode + palette" '200|"dark"|"slate"|null' "$(thpatch '{"mode":"dark","palette":"slate"}')|$(j .mode)|$(j .palette)|$(j .density)"
+check "primaryColor stored lowercase" '200|"#2563eb"' "$(thpatch '{"primaryColor":"#2563EB"}')|$(j .primaryColor)"
+check "PATCH the rest keeps earlier fields" '200|"tinted"|"spacious"|"reduced"|"dark"|"#2563eb"' "$(thpatch '{"sidebarStyle":"tinted","density":"spacious","motion":"reduced"}')|$(j .sidebarStyle)|$(j .density)|$(j .motion)|$(j .mode)|$(j .primaryColor)"
+check "null → default" '200|null|"slate"' "$(thpatch '{"mode":null}')|$(j .mode)|$(j .palette)"
+check "  SQL NULL" t "$(q "select mode is null from theme_settings where user_id='$ADMIN'")"
+check "mode: sepia → 400" 400 "$(thpatch '{"mode":"sepia"}')"
+check "primaryColor: red → 400" 400 "$(thpatch '{"primaryColor":"red"}')"
+check "primaryColor: #fff → 400" 400 "$(thpatch '{"primaryColor":"#fff"}')"
+check "density: huge → 400" 400 "$(thpatch '{"density":"huge"}')"
+check "motion: off → 400" 400 "$(thpatch '{"motion":"off"}')"
+check "palette: Bad Name → 400" 400 "$(thpatch '{"palette":"Bad Name"}')"
+check "unknown field → 400" 400 "$(thpatch '{"fontSize":16}')"
+check "nothing changed by bad requests" '"slate"|"#2563eb"|"spacious"' "$(as_admin $TH >/dev/null; j .palette)|$(j .primaryColor)|$(j .density)"
+check "DELETE → 204 (reset)" 204 "$(as_admin -X DELETE $TH)"
+check "  back to defaults, row gone" 'null|null|0' "$(as_admin $TH >/dev/null; j .palette)|$(j .updatedAt)|$(q "select count(*) from theme_settings where user_id='$ADMIN'")"
+check "other user's theme separate" '200|null' "$(thpatch '{"palette":"warm"}' >/dev/null; code -b "access_token=$(node scripts/lib/sign-token.mjs "$SECRET" $(cat /proc/sys/kernel/random/uuid) DOCTOR 60)" $TH)|$(j .palette)"
+q "delete from theme_settings where user_id='$ADMIN'" >/dev/null
 
 rm -rf $D
 echo
