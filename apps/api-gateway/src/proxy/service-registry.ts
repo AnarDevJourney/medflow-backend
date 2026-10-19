@@ -53,6 +53,11 @@ export const SERVICES: readonly ServiceRoute[] = [
     urlEnv: 'NOTIFICATION_SERVICE_URL',
     prefixes: ['/notifications', '/history'],
   },
+  {
+    name: 'configurations-service',
+    urlEnv: 'CONFIGURATIONS_SERVICE_URL',
+    prefixes: ['/configurations'],
+  },
 ];
 
 // Socket.io lives in notification-history-service; the gateway proxies the upgrade

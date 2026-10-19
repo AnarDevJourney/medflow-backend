@@ -1,7 +1,7 @@
 # MedFlow — Backend
 
 Hospital management system built as NestJS microservices: an API gateway plus
-eight services, each with its own PostgreSQL database, talking through Kafka.
+nine services, each with its own PostgreSQL database, talking through Kafka.
 Full design: `../MedFlow_Documentation.docx` and `../DATABASE.md`.
 
 ## Layout
@@ -17,6 +17,7 @@ apps/
   billing-service/                :3006  billing_db
   file-service/                   :3007  file_db
   notification-history-service/   :3008  notification_db
+  configurations-service/         :3009  configurations_db  per-user UI settings (sidebar)
 libs/
   common/     guards, decorators, filters, interceptors, pagination, config, bootstrap
   database/   TypeORM base config, SnakeNamingStrategy, numeric transformer
@@ -36,7 +37,7 @@ Requirements: Node ≥ 22.15, Docker.
 npm install
 npm run env:init     # copies .env.example → .env (root + every app)
 npm run infra:up     # postgres, kafka (+ topics), kafka-ui, redis, minio, mailpit
-npm run dev:all      # all 9 apps in watch mode
+npm run dev:all      # all 10 apps in watch mode
 curl localhost:3000/api/v1/health
 ```
 
@@ -45,7 +46,7 @@ Run a single app: `npm run dev -- patient-service`.
 ### Everything in Docker (one command)
 
 ```bash
-npm run stack:up     # builds the 9 app images + starts infra and apps
+npm run stack:up     # builds the 10 app images + starts infra and apps
 curl localhost:3000/api/v1/health
 npm run stack:logs   # follow logs
 npm run stack:down   # stop (volumes are kept)
@@ -167,6 +168,23 @@ Why the split: a DB insert can be rolled back and repeated harmlessly, a sent em
 |---|---|---|
 | `GET /history/emails` | ADMIN | `status`, `template`, `recipient` (part of the address), `from`, `to`, `page`, `limit`, `sort=createdAt\|sentAt:asc\|desc` |
 
+## Configurations (per-user UI settings)
+
+configurations-service keeps each user's UI configuration; it holds no domain data, so it neither publishes nor consumes Kafka events. Today: the sidebar (`sidebar_settings`, one row per user, created on the first change — until then `GET` returns the defaults).
+
+- Columns: `collapsed`, `groups` (jsonb `[{ id, name, collapsed, items }]`, `NULL` = default grouping; `name: null` = built-in group with a translated title), `favorites` (jsonb array), `show_frequent`, `show_recent`, `page_visits` (jsonb `{ pageKey: { count, lastVisitedAt } }` → "frequently used" and "recently viewed").
+- Page keys (`patients`, `lab-queue`, …) belong to the frontend; the backend only checks their shape (lowercase slug ≤ 40), that group ids are unique and that a page is in at most one group.
+- `PATCH` upserts only the sent fields (two tabs changing different settings don't overwrite each other). A visit is one atomic `INSERT … ON CONFLICT` (parallel visits all count), at most 100 distinct pages per user, and does not touch `updated_at`.
+- The frontend fetches the settings once per session (TanStack Query, `staleTime: Infinity`), applies every change to the cache first and then writes it; if the service is down the sidebar falls back to the defaults.
+- End-to-end check: `./scripts/test-configurations.sh`.
+
+| Route | Who | Notes |
+|---|---|---|
+| `GET /configurations/sidebar` | all | own settings (defaults if none saved) |
+| `PATCH /configurations/sidebar` | all | any of `collapsed`, `groups` (or `null`), `favorites`, `showFrequent`, `showRecent` |
+| `POST /configurations/sidebar/visits` | all | `{ pageKey }` → 204 |
+| `DELETE /configurations/sidebar/visits` | all | clears frequent + recent, keeps the layout → 204 |
+
 ## Build progress
 
 | Phase | Status |
@@ -177,6 +195,7 @@ Why the split: a DB insert can be rolled back and repeated harmlessly, a sent em
 | 4.1 notification-history: action history (batch consumer + `/history`) | ✅ |
 | 4.2 notification-history: in-app notifications + Socket.io | ✅ |
 | 4.3 notification-history: emails (BullMQ + Mailpit, `/history/emails`) | ✅ |
+| configurations-service: sidebar settings | ✅ |
 | 5 staff-service | next |
 | 6–12 patient, appointment, medical-record, billing, file, frontend, demo seed | — |
 

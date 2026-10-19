@@ -1,4 +1,4 @@
-# Full stack in Docker: infrastructure (from docker-compose.dev.yml) + all 9 apps.
+# Full stack in Docker: infrastructure (from docker-compose.dev.yml) + all 10 apps.
 #   npm run stack:up      → build images and start everything
 #   npm run stack:down    → stop (data volumes are kept)
 # Only the gateway (3000) is published for the apps; services are reachable
@@ -67,6 +67,7 @@ services:
       BILLING_SERVICE_URL: http://billing-service:3006
       FILE_SERVICE_URL: http://file-service:3007
       NOTIFICATION_SERVICE_URL: http://notification-history-service:3008
+      CONFIGURATIONS_SERVICE_URL: http://configurations-service:3009
     ports:
       - '3000:3000'
     depends_on:
@@ -79,6 +80,7 @@ services:
       billing-service: { condition: service_healthy }
       file-service: { condition: service_healthy }
       notification-history-service: { condition: service_healthy }
+      configurations-service: { condition: service_healthy }
 
   auth-service:
     <<: *service
@@ -202,3 +204,14 @@ services:
       redis: { condition: service_healthy } # token block-list + email queue
       mailpit: { condition: service_healthy } # SMTP
       kafka-init: { condition: service_completed_successfully } # consumes every topic
+
+  configurations-service:
+    <<: *service
+    build:
+      <<: *app-build
+      args: { APP: configurations-service }
+    image: medflow/configurations-service
+    environment:
+      <<: *common-env
+      PORT: 3009
+      DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/configurations_db

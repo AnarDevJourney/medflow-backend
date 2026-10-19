@@ -11,7 +11,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 APPS=(api-gateway auth-service staff-service patient-service appointment-service
-  medical-record-service billing-service file-service notification-history-service)
+  medical-record-service billing-service file-service notification-history-service
+  configurations-service)
 INFRA="postgres kafka kafka-init kafka-ui redis minio mailpit"
 
 # One tab's command: follow the logs; when the stream ends (container

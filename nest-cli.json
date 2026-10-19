@@ -73,6 +73,13 @@
       "sourceRoot": "apps/notification-history-service/src",
       "compilerOptions": { "tsConfigPath": "apps/notification-history-service/tsconfig.app.json" }
     },
+    "configurations-service": {
+      "type": "application",
+      "root": "apps/configurations-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/configurations-service/src",
+      "compilerOptions": { "tsConfigPath": "apps/configurations-service/tsconfig.app.json" }
+    },
     "common": {
       "type": "library",
       "root": "libs/common",
