@@ -1,9 +1,10 @@
 #!/bin/bash
-# End-to-end checks of configurations-service (sidebar settings) through the
-# gateway: defaults, partial upserts, validation, atomic page-visit counters,
-# per-user isolation.
+# End-to-end checks of configurations-service (sidebar + table settings)
+# through the gateway: defaults, partial upserts, validation, atomic
+# page-visit counters, per-user isolation, table reset.
 # Needs the Docker stack: ./scripts/run-all.sh, then ./scripts/test-configurations.sh
-# Deletes the sidebar_settings rows of the dev admin and of a throw-away user.
+# Deletes the sidebar_settings / table_settings rows of the dev admin and of
+# a throw-away user.
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 G=http://localhost:3000/api/v1/configurations/sidebar
 D=$(mktemp -d)
@@ -94,6 +95,39 @@ code -b "access_token=$T" -X PATCH $G -H 'content-type: application/json' -d '{"
 check "  their change saved for them" '["lab-queue"]' "$(code -b "access_token=$T" $G >/dev/null; j .favorites)"
 check "  admin's settings untouched" '["patients"]|false' "$(as_admin $G >/dev/null; j .favorites)|$(j .collapsed)"
 q "delete from sidebar_settings where user_id='$OTHER'" >/dev/null
+
+echo "Table settings"
+T_URL=http://localhost:3000/api/v1/configurations/tables
+tpatch() { as_admin -X PATCH $T_URL/$1 -H 'content-type: application/json' -d "$2"; }
+q "delete from table_settings where user_id='$ADMIN'" >/dev/null
+check "GET unknown table → defaults" '200|{"tableKey":"patients","columns":null,"density":null,"view":null,"updatedAt":null}' "$(as_admin $T_URL/patients)|$(j .)"
+check "  GET creates no row" 0 "$(q "select count(*) from table_settings where user_id='$ADMIN'")"
+check "bad table key → 400" 400 "$(as_admin $T_URL/Bad_Key)"
+COLS='[{"key":"mrn","visible":true,"width":120,"pinned":"left"},{"key":"lastName","visible":true,"width":null,"pinned":null},{"key":"createdAt","visible":false,"width":160,"pinned":"right"}]'
+check "PATCH columns" '200|3|"left"|null' "$(tpatch patients "{\"columns\":$COLS}")|$(j '.columns|length')|$(j '.columns[0].pinned')|$(j '.columns[1].width')"
+check "PATCH density keeps columns" '200|"compact"|3' "$(tpatch patients '{"density":"compact"}')|$(j .density)|$(j '.columns|length')"
+check "PATCH view" '200|"striped"' "$(tpatch patients '{"view":"striped"}')|$(j .view)"
+check "other table independent" '200|null|"comfortable"' "$(tpatch invoices '{"density":"comfortable"}')|$(j .columns)|$(j .density)"
+check "  patients unchanged" '"compact"|"striped"' "$(as_admin $T_URL/patients >/dev/null; j .density)|$(j .view)"
+check "density: null → default" '200|null|"striped"' "$(tpatch patients '{"density":null}')|$(j .density)|$(j .view)"
+check "  SQL NULL" t "$(q "select density is null from table_settings where user_id='$ADMIN' and table_key='patients'")"
+check "duplicate column key → 400" '400|"columns"' "$(tpatch patients '{"columns":[{"key":"a","visible":true,"width":null,"pinned":null},{"key":"a","visible":false,"width":null,"pinned":null}]}')|$(j '.error.details[0].field')"
+check "width < 40 → 400" 400 "$(tpatch patients '{"columns":[{"key":"a","visible":true,"width":20,"pinned":null}]}')"
+check "width not integer → 400" 400 "$(tpatch patients '{"columns":[{"key":"a","visible":true,"width":"120","pinned":null}]}')"
+check "pinned: middle → 400" 400 "$(tpatch patients '{"columns":[{"key":"a","visible":true,"width":null,"pinned":"middle"}]}')"
+check "visible: \"no\" → 400" 400 "$(tpatch patients '{"columns":[{"key":"a","visible":"no","width":null,"pinned":null}]}')"
+check "density: dense → 400" 400 "$(tpatch patients '{"density":"dense"}')"
+check "bad column key → 400" 400 "$(tpatch patients '{"columns":[{"key":"a b","visible":true,"width":null,"pinned":null}]}')"
+check "unknown field → 400" 400 "$(tpatch patients '{"pageSize":50}')"
+check "nothing changed by bad requests" '3|"striped"' "$(as_admin $T_URL/patients >/dev/null; j '.columns|length')|$(j .view)"
+check "DELETE → 204 (reset)" 204 "$(as_admin -X DELETE $T_URL/patients)"
+check "  back to defaults, row gone" 'null|null|0' "$(as_admin $T_URL/patients >/dev/null; j .columns)|$(j .updatedAt)|$(q "select count(*) from table_settings where user_id='$ADMIN' and table_key='patients'")"
+check "  other table kept" '"comfortable"' "$(as_admin $T_URL/invoices >/dev/null; j .density)"
+check "DELETE of unsaved table → 204" 204 "$(as_admin -X DELETE $T_URL/never-saved)"
+q "insert into table_settings (user_id, table_key) select '$ADMIN', 't' || i from generate_series(1, 199) i" >/dev/null
+check "201st table → 422 BUSINESS_RULE" '422|"BUSINESS_RULE"' "$(tpatch one-too-many '{"density":"compact"}')|$(j .error.code)"
+check "  existing table still updatable" 200 "$(tpatch invoices '{"density":"compact"}')"
+q "delete from table_settings where user_id='$ADMIN'" >/dev/null
 
 rm -rf $D
 echo

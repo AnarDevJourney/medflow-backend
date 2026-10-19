@@ -17,7 +17,7 @@ apps/
   billing-service/                :3006  billing_db
   file-service/                   :3007  file_db
   notification-history-service/   :3008  notification_db
-  configurations-service/         :3009  configurations_db  per-user UI settings (sidebar)
+  configurations-service/         :3009  configurations_db  per-user UI settings (sidebar, tables)
 libs/
   common/     guards, decorators, filters, interceptors, pagination, config, bootstrap
   database/   TypeORM base config, SnakeNamingStrategy, numeric transformer
@@ -170,7 +170,7 @@ Why the split: a DB insert can be rolled back and repeated harmlessly, a sent em
 
 ## Configurations (per-user UI settings)
 
-configurations-service keeps each user's UI configuration; it holds no domain data, so it neither publishes nor consumes Kafka events. Today: the sidebar (`sidebar_settings`, one row per user, created on the first change — until then `GET` returns the defaults).
+configurations-service keeps each user's UI configuration; it holds no domain data, so it neither publishes nor consumes Kafka events. Two tables: `sidebar_settings` (one row per user) and `table_settings` (one row per user and table). A row is created on the first change; until then `GET` returns the defaults.
 
 - Columns: `collapsed`, `groups` (jsonb `[{ id, name, collapsed, items }]`, `NULL` = default grouping; `name: null` = built-in group with a translated title), `favorites` (jsonb array), `show_frequent`, `show_recent`, `page_visits` (jsonb `{ pageKey: { count, lastVisitedAt } }` → "frequently used" and "recently viewed").
 - Page keys (`patients`, `lab-queue`, …) belong to the frontend; the backend only checks their shape (lowercase slug ≤ 40), that group ids are unique and that a page is in at most one group.
@@ -185,6 +185,14 @@ configurations-service keeps each user's UI configuration; it holds no domain da
 | `POST /configurations/sidebar/visits` | all | `{ pageKey }` → 204 |
 | `DELETE /configurations/sidebar/visits` | all | clears frequent + recent, keeps the layout → 204 |
 
+**Table settings** (`table_settings`, PK `(user_id, table_key)`): `columns` (jsonb `[{ key, visible, width, pinned: left|right|null }]` in display order), `density` (`compact | comfortable`), `view` (preset look, e.g. `striped`). `NULL` = the table's default — only the frontend knows a table's columns and defaults, so the backend checks shapes only (column keys unique, width 40–1200). At most 200 tables with saved settings per user.
+
+| Route | Who | Notes |
+|---|---|---|
+| `GET /configurations/tables/:tableKey` | all | own settings of that table (all `null` if none saved) |
+| `PATCH /configurations/tables/:tableKey` | all | any of `columns`, `density`, `view`; `null` = back to that default |
+| `DELETE /configurations/tables/:tableKey` | all | reset the table to its defaults → 204 |
+
 ## Build progress
 
 | Phase | Status |
@@ -196,6 +204,7 @@ configurations-service keeps each user's UI configuration; it holds no domain da
 | 4.2 notification-history: in-app notifications + Socket.io | ✅ |
 | 4.3 notification-history: emails (BullMQ + Mailpit, `/history/emails`) | ✅ |
 | configurations-service: sidebar settings | ✅ |
+| configurations-service: table settings | ✅ |
 | 5 staff-service | next |
 | 6–12 patient, appointment, medical-record, billing, file, frontend, demo seed | — |
 
