@@ -6,11 +6,27 @@ export interface HistoryEntry {
   entityType: string; // 'USER', 'APPOINTMENT', …
   entityId: string;
   patientId?: string | null; // set → the row shows up in the patient timeline
-  // Readable by ADMIN: never clinical values (diagnoses, results, drugs)
+  // Readable by ADMIN: never clinical values (diagnoses, results, drugs).
+  // English; kept as the fallback for clients without the key.
   summary: string;
+  // The same sentence for the UI to translate: historyEvents.<key> in the
+  // frontend locales, filled with the params
+  message: HistoryMessage;
   // Ids, changed field NAMES, amounts — never clinical values or tokens
   metadata?: Record<string, unknown>;
 }
+
+// Params are data, never translated text: names, emails, role codes
+// ('NURSE'), field names ('firstName'). actor null = the system.
+export interface HistoryMessage {
+  key: string;
+  params: Record<string, string | string[] | null>;
+}
+
+export const message = (
+  key: string,
+  params: HistoryMessage['params'] = {},
+): HistoryMessage => ({ key, params });
 
 // Events that never reach the action history (DOC 5.6)
 export const NOT_IN_HISTORY = [

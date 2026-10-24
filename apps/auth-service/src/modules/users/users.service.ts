@@ -55,10 +55,12 @@ export class UsersService {
       qb.andWhere('user.status = :status', { status: query.status });
     }
     if (query.search) {
+      // The full name also matches a first or last name alone. Only these
+      // two expressions: each has a trigram index (AddUserSearchIndexes),
+      // and one more unindexed OR would force a full table scan.
       qb.andWhere(
-        `(user.firstName ILIKE :search OR user.lastName ILIKE :search
-          OR user.email ILIKE :search
-          OR (user.firstName || ' ' || user.lastName) ILIKE :search)`,
+        `((user.firstName || ' ' || user.lastName) ILIKE :search
+          OR user.email ILIKE :search)`,
         { search: likePattern(query.search) },
       );
     }

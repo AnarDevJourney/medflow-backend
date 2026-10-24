@@ -17,6 +17,7 @@ const MAX_TRACKED_PAGES = 100;
 // DTO field → column. Only these can be written by PATCH.
 const COLUMNS = {
   collapsed: { column: 'collapsed', json: false },
+  position: { column: 'position', json: false },
   groups: { column: 'groups', json: true },
   favorites: { column: 'favorites', json: true },
   showFrequent: { column: 'show_frequent', json: false },

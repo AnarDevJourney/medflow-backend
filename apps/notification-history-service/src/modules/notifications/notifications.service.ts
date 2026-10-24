@@ -40,6 +40,12 @@ export class NotificationsService {
     if (query.unread !== undefined) {
       qb.andWhere('n.isRead = :isRead', { isRead: !query.unread });
     }
+    if (query.urgent !== undefined) {
+      qb.andWhere('n.isUrgent = :urgent', { urgent: query.urgent });
+    }
+    if (query.type) qb.andWhere('n.type = :type', { type: query.type });
+    if (query.from) qb.andWhere('n.createdAt >= :from', { from: query.from });
+    if (query.to) qb.andWhere('n.createdAt <= :to', { to: query.to });
 
     const sort = parseSort(query.sort, NOTIFICATION_SORT_FIELDS, {
       createdAt: 'DESC',

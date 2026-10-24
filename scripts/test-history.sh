@@ -48,6 +48,8 @@ check "history row written (≤ 6 s)" 1 $(waitfor 6 1 hrows $E1)
 ROW=$(q notification_db "select event_type||'|'||source||'|'||actor_id||'|'||actor_role||'|'||entity_type||'|'||entity_id||'|'||(patient_id is null)||'|'||(correlation_id is not null) from action_history where event_id='$E1'")
 check "row: type, source, actor, entity, no patient, correlation id" "user.invited|auth-service|$ADMIN_ID|ADMIN|USER|$U1|true|true" "$ROW"
 check "summary" "$ADMIN_NAME invited History Test as NURSE" "$(q notification_db "select summary from action_history where event_id='$E1'")"
+check "translatable key + data params (UI builds the sentence)" "user.invited|$ADMIN_NAME|History Test|NURSE" \
+  "$(q notification_db "select summary_key || '|' || (summary_params->>'actor') || '|' || (summary_params->>'name') || '|' || (summary_params->>'role') from action_history where event_id='$E1'")"
 check "occurred_at = event time, not insert time" t $(q notification_db "select h.occurred_at = '$(q auth_db "select payload->>'occurredAt' from outbox_events where id='$E1'")'::timestamptz from action_history h where event_id='$E1'")
 check "invite link / token never stored" 0 $(q notification_db "select count(*) from action_history where event_id='$E1' and (metadata::text ilike '%token%' or metadata::text ilike '%link%' or summary ilike '%token%')")
 check "metadata keeps email + role" "$EMAIL|NURSE" "$(q notification_db "select metadata->>'email'||'|'||(metadata->>'role') from action_history where event_id='$E1'")"

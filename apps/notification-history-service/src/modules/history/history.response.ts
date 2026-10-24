@@ -11,6 +11,8 @@ export interface HistoryResponse {
   entityId: string;
   patientId: string | null;
   summary: string;
+  summaryKey: string | null;
+  summaryParams: Record<string, unknown>;
   metadata: Record<string, unknown>;
   correlationId: string | null;
   occurredAt: Date;
@@ -33,6 +35,8 @@ export function toHistoryResponse(row: ActionHistory): HistoryResponse {
     entityId: row.entityId,
     patientId: row.patientId,
     summary: row.summary,
+    summaryKey: row.summaryKey,
+    summaryParams: row.summaryParams,
     metadata: row.metadata,
     correlationId: row.correlationId,
     occurredAt: row.occurredAt,

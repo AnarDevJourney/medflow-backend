@@ -91,6 +91,20 @@ check "?unread=true" 200 $(code -b $D/d.jar "$G/notifications?unread=true")
 yes_no "  … total 1" "$(grep '"total":1' $D/body)" "$(cat $D/body)"
 check "?unread=false" 200 $(code -b $D/d.jar "$G/notifications?unread=false")
 yes_no "  … total 0" "$(grep '"total":0' $D/body)" "$(cat $D/body)"
+check "?urgent=true (SESSION_REVOKED is urgent)" 200 $(code -b $D/d.jar "$G/notifications?urgent=true")
+yes_no "  … total 1" "$(grep '"total":1' $D/body)" "$(cat $D/body)"
+check "?urgent=false" 200 $(code -b $D/d.jar "$G/notifications?urgent=false")
+yes_no "  … total 0" "$(grep '"total":0' $D/body)" "$(cat $D/body)"
+check "?type=SESSION_REVOKED" 200 $(code -b $D/d.jar "$G/notifications?type=SESSION_REVOKED")
+yes_no "  … total 1" "$(grep '"total":1' $D/body)" "$(cat $D/body)"
+check "?type=LAB_RESULT_READY" 200 $(code -b $D/d.jar "$G/notifications?type=LAB_RESULT_READY")
+yes_no "  … total 0" "$(grep '"total":0' $D/body)" "$(cat $D/body)"
+check "?type=bad-type → 400" 400 $(code -b $D/d.jar "$G/notifications?type=bad-type")
+check "?from=2000-01-01 (includes it)" 200 $(code -b $D/d.jar "$G/notifications?from=2000-01-01T00:00:00Z")
+yes_no "  … total 1" "$(grep '"total":1' $D/body)" "$(cat $D/body)"
+check "?to=2000-01-01 (before it)" 200 $(code -b $D/d.jar "$G/notifications?to=2000-01-01T00:00:00Z")
+yes_no "  … total 0" "$(grep '"total":0' $D/body)" "$(cat $D/body)"
+check "?from=not-a-date → 400" 400 $(code -b $D/d.jar "$G/notifications?from=not-a-date")
 check "unread-count" 200 $(code -b $D/d.jar "$G/notifications/unread-count")
 yes_no "  … 1" "$(grep '"count":1' $D/body)" "$(cat $D/body)"
 

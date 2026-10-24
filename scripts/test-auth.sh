@@ -96,6 +96,14 @@ check "filter role+status" 200 $(code -b $D/a.jar "$G/users?role=DOCTOR&status=D
 grep -q "$EMAIL" $D/body && check "deactivated doctor in filtered list" ok ok || check "deactivated doctor in filtered list" ok missing
 code -b $D/a.jar "$G/users?search=aysel%20m%C9%99mm%C9%99d" >/dev/null
 grep -q "$EMAIL" $D/body && check "search by full name (case-insensitive)" ok ok || check "search by full name" ok missing
+# The query matches only the full name and the email (trigram indexes) —
+# a first or last name alone must still be found
+code -b $D/a.jar "$G/users?search=AYSEL&role=DOCTOR&status=DEACTIVATED&limit=100" >/dev/null
+grep -q "$EMAIL" $D/body && check "search by first name only" ok ok || check "search by first name only" ok missing
+code -b $D/a.jar "$G/users?search=m%C9%99mm%C9%99dova&role=DOCTOR&status=DEACTIVATED&limit=100" >/dev/null
+grep -q "$EMAIL" $D/body && check "search by last name only" ok ok || check "search by last name only" ok missing
+code -b $D/a.jar "$G/users?search=doctor$SUF" >/dev/null
+check "search by part of the email" 1 "$(field total)"
 code -b $D/a.jar "$G/users?search=%25" >/dev/null
 check "search '%' is literal, not a wildcard" 0 "$(field total)"
 check "bad role filter → 400" 400 $(code -b $D/a.jar "$G/users?role=GOD")

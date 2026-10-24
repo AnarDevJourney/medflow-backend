@@ -44,6 +44,14 @@ export class ActionHistory {
   @Column({ type: 'varchar', length: 500 })
   summary: string;
 
+  // Translatable form of the summary (historyEvents.<key> in the UI).
+  // NULL on rows written before it existed → the UI shows `summary`.
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  summaryKey: string | null;
+
+  @Column({ type: 'jsonb', default: () => `'{}'::jsonb` })
+  summaryParams: Record<string, unknown>;
+
   // Ids, changed field NAMES, amounts — never clinical values or tokens
   @Column({ type: 'jsonb', default: () => `'{}'::jsonb` })
   metadata: Record<string, unknown>;

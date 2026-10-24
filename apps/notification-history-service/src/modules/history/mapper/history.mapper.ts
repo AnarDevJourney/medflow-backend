@@ -47,6 +47,8 @@ export class HistoryMapper {
       entityId: entry.entityId,
       patientId: entry.patientId ?? null,
       summary: clip(entry.summary, 500)!,
+      summaryKey: entry.message.key,
+      summaryParams: entry.message.params,
       metadata: entry.metadata ?? {},
       correlationId: clip(event.correlationId, 64),
       occurredAt: new Date(event.occurredAt),

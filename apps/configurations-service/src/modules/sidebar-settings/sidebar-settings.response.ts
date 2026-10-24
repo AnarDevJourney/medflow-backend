@@ -1,11 +1,13 @@
 import {
   PageVisit,
   SidebarGroup,
+  SidebarPosition,
   SidebarSettings,
 } from './entities/sidebar-settings.entity';
 
 export interface SidebarSettingsResponse {
   collapsed: boolean;
+  position: SidebarPosition;
   groups: SidebarGroup[] | null;
   favorites: string[];
   showFrequent: boolean;
@@ -17,6 +19,7 @@ export interface SidebarSettingsResponse {
 // What a user without a row gets (same as the column defaults)
 export const DEFAULT_SIDEBAR_SETTINGS: SidebarSettingsResponse = {
   collapsed: false,
+  position: 'left',
   groups: null,
   favorites: [],
   showFrequent: true,
@@ -30,6 +33,7 @@ export function toSidebarSettingsResponse(
 ): SidebarSettingsResponse {
   return {
     collapsed: row.collapsed,
+    position: row.position,
     groups: row.groups,
     favorites: row.favorites,
     showFrequent: row.showFrequent,

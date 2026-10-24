@@ -5,6 +5,7 @@ import {
   ArrayUnique,
   IsArray,
   IsBoolean,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -13,6 +14,10 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import {
+  SIDEBAR_POSITIONS,
+  type SidebarPosition,
+} from '../entities/sidebar-settings.entity';
 
 // Page keys and group ids: lowercase slugs ('patients', 'lab-queue', 'g-k3x9')
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -64,6 +69,12 @@ export class UpdateSidebarSettingsDto {
   @Transform(sent)
   @IsBoolean()
   collapsed?: boolean;
+
+  // Not nullable: @IsOptional() would let null through to a NOT NULL column
+  @ApiPropertyOptional({ enum: SIDEBAR_POSITIONS })
+  @ValidateIf((_, value) => value !== undefined)
+  @IsIn(SIDEBAR_POSITIONS)
+  position?: SidebarPosition;
 
   // null = back to the default grouping
   @ApiPropertyOptional({ type: [SidebarGroupDto], nullable: true })

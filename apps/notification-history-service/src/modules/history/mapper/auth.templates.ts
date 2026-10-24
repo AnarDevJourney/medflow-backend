@@ -1,11 +1,14 @@
-import type { AuthEventPayloads } from '@medflow/contracts';
+import type { AuthEventPayloads, DomainEvent } from '@medflow/contracts';
 import {
   actorName,
+  message,
   HistoryEventType,
   HistoryTemplates,
 } from './history-template';
 
 const USER = 'USER';
+// The actor's name, or null = "System" in the reader's language
+const actor = (event: DomainEvent): string | null => event.actor?.name ?? null;
 
 // auth.events. inviteLink / resetLink hold raw tokens and are never copied.
 export const authTemplates: HistoryTemplates<
@@ -22,6 +25,11 @@ export const authTemplates: HistoryTemplates<
         : event.actor
           ? `${actorName(event)} invited ${name} as ${p.role}`
           : `${name} was created as ${p.role} by the system`, // seeded admin
+      message: p.resent
+        ? message('user.invitationResent', { actor: actor(event), name })
+        : event.actor
+          ? message('user.invited', { actor: actor(event), name, role: p.role })
+          : message('user.createdBySystem', { name, role: p.role }),
       metadata: {
         email: p.email,
         role: p.role,
@@ -41,6 +49,10 @@ export const authTemplates: HistoryTemplates<
       summary: event.actor
         ? `${name} accepted the invitation and activated the account`
         : `The account of ${name} was activated by the system`,
+      message: {
+        key: event.actor ? 'user.activated' : 'user.activatedBySystem',
+        params: { name },
+      },
       metadata: { email: p.email, role: p.role },
     };
   },
@@ -56,6 +68,14 @@ export const authTemplates: HistoryTemplates<
         event.actor?.id === p.userId
           ? `${name} updated their profile (${fields})`
           : `${actorName(event)} updated the account of ${name} (${fields})`,
+      message:
+        event.actor?.id === p.userId
+          ? message('user.profileUpdated', { name, fields: p.changedFields })
+          : message('user.updated', {
+              actor: actor(event),
+              name,
+              fields: p.changedFields,
+            }),
       metadata: {
         email: p.email,
         role: p.role,
@@ -70,6 +90,10 @@ export const authTemplates: HistoryTemplates<
       entityType: USER,
       entityId: p.userId,
       summary: `${actorName(event)} deactivated the account of ${p.email}`,
+      message: message('user.deactivated', {
+        actor: actor(event),
+        email: p.email,
+      }),
       metadata: { email: p.email, role: p.role },
     };
   },
@@ -80,6 +104,10 @@ export const authTemplates: HistoryTemplates<
       entityType: USER,
       entityId: p.userId,
       summary: `${actorName(event)} reactivated the account of ${p.email}`,
+      message: message('user.reactivated', {
+        actor: actor(event),
+        email: p.email,
+      }),
       metadata: { email: p.email, role: p.role, status: p.status },
     };
   },
@@ -91,6 +119,7 @@ export const authTemplates: HistoryTemplates<
       entityId: p.userId,
       summary:
         'All sessions were revoked: a used refresh token was presented again (possible token theft)',
+      message: message('user.sessionRevoked', {}),
       metadata: { reason: p.reason, familyId: p.familyId },
     };
   },
@@ -105,6 +134,10 @@ export const authTemplates: HistoryTemplates<
         p.via === 'RESET'
           ? `${name} reset their password with an email link`
           : `${name} changed their password`,
+      message: {
+        key: p.via === 'RESET' ? 'user.passwordReset' : 'user.passwordChanged',
+        params: { name },
+      },
       metadata: { email: p.email, via: p.via },
     };
   },

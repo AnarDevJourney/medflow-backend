@@ -14,6 +14,9 @@ export interface SidebarGroup {
   items: string[]; // page keys in display order
 }
 
+export const SIDEBAR_POSITIONS = ['left', 'right'] as const;
+export type SidebarPosition = (typeof SIDEBAR_POSITIONS)[number];
+
 export interface PageVisit {
   count: number;
   lastVisitedAt: string; // ISO timestamp
@@ -30,6 +33,10 @@ export class SidebarSettings {
   // Icons-only mode
   @Column({ type: 'boolean', default: false })
   collapsed: boolean;
+
+  // Side of the screen the sidebar is on
+  @Column({ type: 'varchar', length: 5, default: 'left' })
+  position: SidebarPosition;
 
   // null until the user changes the grouping or order
   @Column({ type: 'jsonb', nullable: true })
