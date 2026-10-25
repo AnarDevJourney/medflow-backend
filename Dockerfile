@@ -8,6 +8,8 @@ WORKDIR /app
 
 # Install deps first so this layer is cached until package*.json changes
 COPY package.json package-lock.json ./
+# tablesync-nest comes from a local tarball until it is on npm
+COPY vendor ./vendor
 RUN npm ci
 
 COPY . .
@@ -19,6 +21,7 @@ RUN npx nest build "$APP"
 FROM node:24-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY vendor ./vendor
 RUN npm ci --omit=dev && npm cache clean --force
 
 # ─── Stage 3: runtime ─────────────────────────────────────────────────────────
