@@ -9,16 +9,16 @@ import {
   Post,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { CurrentUser, Role, Roles } from '@medflow/common';
+import { Authenticated, CurrentUser } from '@medflow/common';
 import type { CurrentUserData } from '@medflow/common';
 import { RecordPageVisitDto } from './dto/record-page-visit.dto';
 import { UpdateSidebarSettingsDto } from './dto/update-sidebar-settings.dto';
 import { SidebarSettingsService } from './sidebar-settings.service';
 
-// Own sidebar configuration — every role
+// Own sidebar configuration — every signed-in user
 @ApiTags('sidebar settings')
 @Controller('configurations/sidebar')
-@Roles(...Object.values(Role))
+@Authenticated()
 export class SidebarSettingsController {
   constructor(private readonly sidebar: SidebarSettingsService) {}
 

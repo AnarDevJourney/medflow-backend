@@ -103,6 +103,10 @@ export class ProxyService {
       proxyReq.setHeader(HEADERS.USER_ROLE, auth.role);
       // Non-ASCII names ("Məmmədova") are not valid in raw headers
       proxyReq.setHeader(HEADERS.USER_NAME, encodeURIComponent(auth.name));
+      proxyReq.setHeader(
+        HEADERS.USER_PERMISSIONS,
+        (req as AuthenticatedRequest).permissions ?? '',
+      );
     }
 
     const requestId = req.headers[HEADERS.REQUEST_ID];

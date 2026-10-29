@@ -2,7 +2,11 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EntityManager } from 'typeorm';
 import { DOMAIN_TOPICS } from '@medflow/contracts';
-import type { EventEnvelope } from '@medflow/contracts';
+import type {
+  EventEnvelope,
+  RolePermissionsUpdatedPayload,
+} from '@medflow/contracts';
+import { Role } from '@medflow/common';
 import { BaseBatchConsumer } from '@medflow/kafka';
 import { Notification } from '../modules/notifications/entities/notification.entity';
 import {
@@ -109,6 +113,15 @@ export class NotificationsConsumer extends BaseBatchConsumer<
     ]);
 
     for (const event of events) {
+      // A replayed old list must not reach the clients
+      if (
+        event.eventType === 'role_permissions.updated' &&
+        Date.now() - Date.parse(event.occurredAt) <= this.pushMaxAgeMs
+      ) {
+        const { role, permissions } =
+          event.payload as RolePermissionsUpdatedPayload;
+        this.gateway.pushPermissions(role as Role, permissions);
+      }
       if (!REVOKES_SESSIONS.has(event.eventType)) continue;
       const { userId } = event.payload as { userId: string };
       await this.gateway.revokeSockets(userId, Date.parse(event.occurredAt));

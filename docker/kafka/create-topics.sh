@@ -5,7 +5,7 @@ set -e
 BOOTSTRAP=kafka:9092
 KAFKA_BIN=/opt/kafka/bin
 
-for topic in auth.events staff.events patient.events appointment.events record.events billing.events file.events; do
+for topic in auth.events staff.events patient.events appointment.events record.events billing.events file.events configurations.events; do
   $KAFKA_BIN/kafka-topics.sh --bootstrap-server $BOOTSTRAP --create --if-not-exists \
     --topic "$topic" --partitions 3 --replication-factor 1
 done

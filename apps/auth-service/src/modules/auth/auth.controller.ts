@@ -13,11 +13,10 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import {
+  Authenticated,
   AUTH_COOKIES,
   CurrentUser,
   readCookie,
-  Role,
-  Roles,
 } from '@medflow/common';
 import type { CurrentUserData } from '@medflow/common';
 import { getRequestMeta } from '../../common/request-meta';
@@ -32,8 +31,6 @@ import {
   LoginDto,
   ResetPasswordDto,
 } from './dto/auth.dto';
-
-const ALL_ROLES = Object.values(Role);
 
 // Public routes (login, refresh, logout, invitations, password reset) are
 // let through by the gateway without a JWT. Tokens only travel in cookies.
@@ -88,13 +85,13 @@ export class AuthController {
   }
 
   @Get('me')
-  @Roles(...ALL_ROLES)
+  @Authenticated()
   me(@CurrentUser() user: CurrentUserData) {
     return this.auth.me(user.id);
   }
 
   @Patch('me')
-  @Roles(...ALL_ROLES)
+  @Authenticated()
   updateMe(
     @Body() dto: UpdateProfileDto,
     @CurrentUser() user: CurrentUserData,
@@ -104,7 +101,7 @@ export class AuthController {
 
   // Sets new cookies: this session continues, all others are logged out
   @Patch('change-password')
-  @Roles(...ALL_ROLES)
+  @Authenticated()
   async changePassword(
     @Body() dto: ChangePasswordDto,
     @CurrentUser() current: CurrentUserData,

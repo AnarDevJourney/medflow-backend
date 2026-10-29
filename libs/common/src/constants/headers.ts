@@ -6,6 +6,8 @@ export const HEADERS = {
   USER_ID: 'x-user-id',
   USER_ROLE: 'x-user-role',
   USER_NAME: 'x-user-name',
+  // Comma-separated permission codes of the user's role (from Redis)
+  USER_PERMISSIONS: 'x-user-permissions',
 } as const;
 
 export const API_PREFIX = 'api/v1';

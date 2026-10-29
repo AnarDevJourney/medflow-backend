@@ -215,3 +215,7 @@ services:
       <<: *common-env
       PORT: 3009
       DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/configurations_db
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy } # permission cache + outbox poller (BullMQ)
+      kafka-init: { condition: service_completed_successfully } # configurations.events exists

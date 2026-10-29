@@ -5,7 +5,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { API_PREFIX } from '../constants/headers';
 import { HttpExceptionFilter } from '../filters/http-exception.filter';
 import { InternalKeyGuard } from '../guards/internal-key.guard';
-import { RolesGuard } from '../guards/roles.guard';
+import { PermissionGuard } from '../guards/permission.guard';
 import { TransformInterceptor } from '../interceptors/transform.interceptor';
 import { requestIdMiddleware } from '../middleware/request-id.middleware';
 import { createValidationPipe } from '../pipes/validation.pipe';
@@ -13,7 +13,7 @@ import { setupSwagger } from './swagger';
 
 // Shared main.ts for every business service, so all eight behave identically:
 // public routes under /api/v1 (reached through the gateway), /internal/* and
-// /health outside the prefix, internal key + roles guards, validation,
+// /health outside the prefix, internal key + permission guards, validation,
 // error envelope and response envelope.
 export async function bootstrapService(
   appModule: Type<unknown>,
@@ -38,7 +38,7 @@ export async function bootstrapService(
       reflector,
       config.getOrThrow<string>('INTERNAL_API_KEY'),
     ),
-    new RolesGuard(reflector),
+    new PermissionGuard(reflector),
   );
   app.useGlobalPipes(createValidationPipe());
   app.useGlobalFilters(new HttpExceptionFilter());

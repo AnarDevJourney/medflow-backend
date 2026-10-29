@@ -1,6 +1,6 @@
 import { Controller, Get, Param, ParseUUIDPipe, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { Role, Roles } from '@medflow/common';
+import { RequirePermission } from '@medflow/common';
 import { EntityHistoryParamsDto } from './dto/history-params.dto';
 import {
   HistoryRangeQueryDto,
@@ -16,13 +16,13 @@ export class HistoryController {
   constructor(private readonly history: HistoryService) {}
 
   @Get()
-  @Roles(Role.ADMIN)
+  @RequirePermission('history.read')
   list(@Query() query: ListHistoryQueryDto) {
     return this.history.list(query);
   }
 
   @Get('entity/:entityType/:entityId')
-  @Roles(Role.ADMIN, Role.DOCTOR, Role.NURSE, Role.ACCOUNTANT)
+  @RequirePermission('history.entity_read')
   forEntity(
     @Param() params: EntityHistoryParamsDto,
     @Query() query: HistoryRangeQueryDto,
@@ -31,7 +31,7 @@ export class HistoryController {
   }
 
   @Get('patients/:patientId')
-  @Roles(Role.ADMIN, Role.DOCTOR, Role.NURSE)
+  @RequirePermission('history.patient_read')
   forPatient(
     @Param('patientId', ParseUUIDPipe) patientId: string,
     @Query() query: HistoryRangeQueryDto,
@@ -40,7 +40,7 @@ export class HistoryController {
   }
 
   @Get('users/:userId')
-  @Roles(Role.ADMIN)
+  @RequirePermission('history.user_read')
   forUser(
     @Param('userId', ParseUUIDPipe) userId: string,
     @Query() query: HistoryRangeQueryDto,

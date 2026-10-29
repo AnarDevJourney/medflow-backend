@@ -35,6 +35,7 @@ export const SERVER_EVENTS = {
   COUNT: 'notification:count', // { count } — unread badge, server is the source of truth
   SESSION_EXPIRED: 'session:expired', // access token expired → refresh, reconnect
   SESSION_REVOKED: 'session:revoked', // logged out elsewhere / deactivated → login
+  PERMISSIONS: 'permissions:updated', // { role, permissions } — the role's new list
 } as const;
 
 interface SocketUser {
@@ -111,6 +112,14 @@ export class NotificationsGateway
     this.server
       .to(ROOMS.user(userId))
       .emit(SERVER_EVENTS.NOTIFICATION, notification);
+  }
+
+  // The admin changed a role's permissions: open clients of that role
+  // update menus and buttons without a reload
+  pushPermissions(role: Role, permissions: string[]) {
+    this.server
+      .to(ROOMS.role(role))
+      .emit(SERVER_EVENTS.PERMISSIONS, { role, permissions });
   }
 
   // Fresh unread counts of several users with one query

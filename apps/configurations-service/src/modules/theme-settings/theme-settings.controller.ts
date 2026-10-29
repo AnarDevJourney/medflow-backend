@@ -8,15 +8,15 @@ import {
   Patch,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { CurrentUser, Role, Roles } from '@medflow/common';
+import { Authenticated, CurrentUser } from '@medflow/common';
 import type { CurrentUserData } from '@medflow/common';
 import { UpdateThemeSettingsDto } from './dto/update-theme-settings.dto';
 import { ThemeSettingsService } from './theme-settings.service';
 
-// Own appearance settings — every role
+// Own appearance settings — every signed-in user
 @ApiTags('theme settings')
 @Controller('configurations/theme')
-@Roles(...Object.values(Role))
+@Authenticated()
 export class ThemeSettingsController {
   constructor(private readonly theme: ThemeSettingsService) {}
 

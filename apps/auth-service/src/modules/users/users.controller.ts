@@ -11,31 +11,33 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { CurrentUser, Role, Roles } from '@medflow/common';
+import { CurrentUser, RequirePermission } from '@medflow/common';
 import type { CurrentUserData } from '@medflow/common';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
 
-// User management — ADMIN only (DOC 8.2)
+// User management (DOC 8.2) — ADMIN by default
 @ApiTags('users')
 @Controller('users')
-@Roles(Role.ADMIN)
 export class UsersController {
   constructor(private readonly users: UsersService) {}
 
   @Get()
+  @RequirePermission('users.read')
   list(@Query() query: ListUsersQueryDto) {
     return this.users.list(query);
   }
 
   @Get(':id')
+  @RequirePermission('users.read')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.users.findOne(id);
   }
 
   @Patch(':id')
+  @RequirePermission('users.update')
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateUserDto,
@@ -45,11 +47,13 @@ export class UsersController {
   }
 
   @Post()
+  @RequirePermission('users.invite')
   invite(@Body() dto: CreateUserDto, @CurrentUser() actor: CurrentUserData) {
     return this.users.invite(dto, actor);
   }
 
   @Post(':id/resend-invite')
+  @RequirePermission('users.invite')
   @HttpCode(HttpStatus.OK)
   resendInvite(
     @Param('id', ParseUUIDPipe) id: string,
@@ -59,6 +63,7 @@ export class UsersController {
   }
 
   @Patch(':id/deactivate')
+  @RequirePermission('users.deactivate')
   deactivate(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: CurrentUserData,
@@ -67,6 +72,7 @@ export class UsersController {
   }
 
   @Patch(':id/reactivate')
+  @RequirePermission('users.deactivate')
   reactivate(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: CurrentUserData,

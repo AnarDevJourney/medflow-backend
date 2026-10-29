@@ -81,7 +81,7 @@ Their data volumes are separate (`medflow_*` vs `medflow-dev_*`).
 
 ## Authentication
 
-- `auth-service` issues tokens; the gateway verifies the access JWT (cookie `access_token`, 15 min) on every non-public request and forwards `x-user-id/role/name`.
+- `auth-service` issues tokens; the gateway verifies the access JWT (cookie `access_token`, 15 min) on every non-public request and forwards `x-user-id/role/name` plus `x-user-permissions` (see Permissions).
 - Refresh token (cookie `refresh_token`, 7 days, path `/api/v1/auth`) is opaque, stored as sha256, rotated on every use; replaying a rotated token revokes the whole family.
 - Access tokens can be killed before they expire (Redis, checked by the gateway):
   - logout → `auth:blocked-jti:<jti>` for the token's remaining lifetime
@@ -96,14 +96,14 @@ Endpoints (prefix `/api/v1`, DOC 8.2):
 | Route | Who | Notes |
 |---|---|---|
 | `POST /auth/login` · `/refresh` · `/logout` | public | cookies only |
-| `GET /auth/me` · `PATCH /auth/me` | all | own first/last name, `avatarFileId` (null removes) |
-| `PATCH /auth/change-password` | all | other sessions revoked, this one gets new cookies |
+| `GET /auth/me` · `PATCH /auth/me` | signed in | own first/last name, `avatarFileId` (null removes) |
+| `PATCH /auth/change-password` | signed in | other sessions revoked, this one gets new cookies |
 | `GET /auth/invitations/:token` · `POST /auth/accept-invite` | public | invite form + activation |
 | `POST /auth/forgot-password` · `/reset-password` | public | always 200 · revokes every session |
-| `GET /users` | ADMIN | `role`, `status`, `search`, `page`, `limit`, `sort` (`createdAt`, `lastName`, `email`, `lastLoginAt`) |
-| `POST /users` · `POST /users/:id/resend-invite` | ADMIN | invite (72 h link) |
-| `GET /users/:id` · `PATCH /users/:id` | ADMIN | name / role; a role change kills live access tokens; own role not editable |
-| `PATCH /users/:id/deactivate` · `/reactivate` | ADMIN | reactivate → ACTIVE, or INVITED if no password was ever set |
+| `GET /users` | `users.read` | `role`, `status`, `search`, `page`, `limit`, `sort` (`createdAt`, `lastName`, `email`, `lastLoginAt`) |
+| `POST /users` · `POST /users/:id/resend-invite` | `users.invite` | invite (72 h link) |
+| `GET /users/:id` · `PATCH /users/:id` | `users.read` · `users.update` | name / role; a role change kills live access tokens; own role not editable |
+| `PATCH /users/:id/deactivate` · `/reactivate` | `users.deactivate` | reactivate → ACTIVE, or INVITED if no password was ever set |
 
 ## Events (Kafka)
 
@@ -127,10 +127,10 @@ notification-history-service reads every domain topic and writes one row per eve
 
 | Route | Who | Notes |
 |---|---|---|
-| `GET /history` | ADMIN | global feed: `eventType`, `actorId`, `entityType`, `from`, `to`, `page`, `limit`, `sort=occurredAt:asc\|desc` |
-| `GET /history/entity/:entityType/:entityId` | ADMIN, DOCTOR, NURSE, ACCOUNTANT | one user / appointment / invoice / lab order |
-| `GET /history/patients/:patientId` | ADMIN, DOCTOR, NURSE | patient timeline across services |
-| `GET /history/users/:userId` | ADMIN | what one staff member did |
+| `GET /history` | `history.read` | global feed: `eventType`, `actorId`, `entityType`, `from`, `to`, `page`, `limit`, `sort=occurredAt:asc\|desc` |
+| `GET /history/entity/:entityType/:entityId` | `history.entity_read` | one user / appointment / invoice / lab order |
+| `GET /history/patients/:patientId` | `history.patient_read` | patient timeline across services |
+| `GET /history/users/:userId` | `history.user_read` | what one staff member did |
 
 ## Notifications (in-app + Socket.io)
 
@@ -166,11 +166,30 @@ Why the split: a DB insert can be rolled back and repeated harmlessly, a sent em
 
 | Route | Who | Notes |
 |---|---|---|
-| `GET /history/emails` | ADMIN | `status`, `template`, `recipient` (part of the address), `from`, `to`, `page`, `limit`, `sort=createdAt\|sentAt:asc\|desc` |
+| `GET /history/emails` | `emails.read` | `status`, `template`, `recipient` (part of the address), `from`, `to`, `page`, `limit`, `sort=createdAt\|sentAt:asc\|desc` |
+Also published: `role_permissions.updated` on `configurations.events` (key = a name-based uuid of the role; payload `role`, full `permissions`, `added`, `removed`).
+
+## Permissions (permission-based access control)
+
+Endpoints don't name roles; they name the permission they need. Which role has which permission is the admin's choice on the frontend's permissions page.
+
+- Catalog: `libs/common/src/permissions/permissions.ts` — 52 codes (`module.action`, never renamed), each with a group and the roles that get it by default (DOC 4.2 matrix). configurations-service syncs it into `permissions` on start: a new code gets its default roles once, a removed code is deleted with its grants.
+- `role_permissions (role, permission)` in configurations_db is the source of truth. Redis caches every role as `permissions:role:<ROLE>` = comma-separated codes (no TTL) + a `:version` key.
+- Per request: the gateway reads the role's key and forwards it as `x-user-permissions` (a client-sent value is dropped). Key missing → `GET /internal/permissions/roles/:role` on configurations-service (reads the DB, refills Redis). Redis / configurations-service down → 503 (fail closed).
+- Services: `@RequirePermission('users.read')` (all listed), `@RequireAnyPermission(...)` (any), `@Authenticated()` (signed in, no permission) + the global `PermissionGuard` → `403 FORBIDDEN "Missing permission: users.read"`. `@CurrentUser().permissions` is there for "own vs all" rules in services. `@Roles`/`RolesGuard` are gone; the `Role` enum stays (one role per user).
+- Admin change: `PUT /configurations/permissions` writes `role_permissions` and one outbox event per changed role in the same transaction → configurations-service consumes it and rewrites the role's Redis key (a versioned Lua write: an older event never overwrites a newer list) → notification-history records it in the action history and pushes `permissions:updated { role, permissions }` to the Socket.io room `role:<ROLE>`, so open browsers update menus without a reload.
+- The database is read only on start (sync + cache warm-up), on a cache miss and on an admin save. ADMIN can never lose `permissions.read` / `permissions.manage` (422).
+- End-to-end check: `./scripts/test-permissions.sh`.
+
+| Route | Who | Notes |
+|---|---|---|
+| `GET /configurations/permissions/me` | signed in | own role + permissions (what the gateway sent) |
+| `GET /configurations/permissions` | `permissions.read` | groups, catalog, locked cells, every role's list |
+| `PUT /configurations/permissions` | `permissions.manage` | `{ roles: { DOCTOR: [...full list] } }`; roles not sent stay unchanged |
 
 ## Configurations (per-user UI settings)
 
-configurations-service keeps each user's UI configuration; it holds no domain data, so it neither publishes nor consumes Kafka events. Three tables: `sidebar_settings` and `theme_settings` (one row per user) and `table_settings` (one row per user and table). A row is created on the first change; until then `GET` returns the defaults.
+configurations-service keeps each user's UI configuration (and the permission matrix above). Three tables: `sidebar_settings` and `theme_settings` (one row per user) and `table_settings` (one row per user and table). A row is created on the first change; until then `GET` returns the defaults.
 
 - Columns: `collapsed`, `groups` (jsonb `[{ id, name, collapsed, items }]`, `NULL` = default grouping; `name: null` = built-in group with a translated title), `favorites` (jsonb array), `show_frequent`, `show_recent`, `page_visits` (jsonb `{ pageKey: { count, lastVisitedAt } }` → "frequently used" and "recently viewed").
 - Page keys (`patients`, `lab-queue`, …) belong to the frontend; the backend only checks their shape (lowercase slug ≤ 40), that group ids are unique and that a page is in at most one group.
@@ -214,6 +233,7 @@ configurations-service keeps each user's UI configuration; it holds no domain da
 | configurations-service: sidebar settings | ✅ |
 | configurations-service: table settings | ✅ |
 | configurations-service: theme settings | ✅ |
+| Permission-based access control (catalog, Redis cache, PermissionGuard, admin page) | ✅ |
 | 5 staff-service | next |
 | 6–12 patient, appointment, medical-record, billing, file, frontend, demo seed | — |
 

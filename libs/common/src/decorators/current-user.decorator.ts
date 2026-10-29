@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import { HEADERS } from '../constants/headers';
 import { Role } from '../enums/role.enum';
 import { CurrentUserData } from '../interfaces/current-user.interface';
+import { readPermissionsHeader } from '../permissions/read-permissions-header';
 
 function header(req: Request, name: string): string | undefined {
   const value = req.headers[name];
@@ -24,6 +25,7 @@ export const CurrentUser = createParamDecorator(
       id,
       role: role as Role,
       name: decodeURIComponent(header(req, HEADERS.USER_NAME) ?? ''),
+      permissions: readPermissionsHeader(req),
     };
   },
 );

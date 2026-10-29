@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { createConfigModule, RedisModule } from '@medflow/common';
 import { AuthMiddleware } from './auth/auth.middleware';
+import { RolePermissionsService } from './auth/role-permissions.service';
 import { envValidationSchema } from './config/env.validation';
 import { GatewayConfigService } from './config/gateway-config.service';
 import { DocsController } from './docs/docs.controller';
@@ -29,6 +30,7 @@ import { RateLimitMiddleware } from './rate-limit/rate-limit.middleware';
     ProxyService,
     HealthService,
     AuthMiddleware,
+    RolePermissionsService,
     RateLimitMiddleware,
   ],
 })

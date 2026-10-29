@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { DomainEvent, EventEnvelope } from '@medflow/contracts';
 import { ActionHistory } from '../entities/action-history.entity';
 import { authTemplates } from './auth.templates';
+import { configurationsTemplates } from './configurations.templates';
 import {
   HistoryEntry,
   HistoryEventType,
@@ -15,6 +16,7 @@ export type NewActionHistory = Omit<ActionHistory, 'id' | 'createdAt'>;
 // templates of its service in here (staffTemplates, patientTemplates, …).
 const TEMPLATES: HistoryTemplates<HistoryEventType> = {
   ...authTemplates,
+  ...configurationsTemplates,
 };
 
 const SKIPPED: ReadonlySet<string> = new Set(NOT_IN_HISTORY);

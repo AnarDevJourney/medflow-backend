@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Topics } from '@medflow/contracts';
-import type { DomainEvent } from '@medflow/contracts';
+import type { AuthEventPayloads, DomainEvent } from '@medflow/contracts';
 import { BaseConsumer, EventHandlers } from '@medflow/kafka';
 
 // auth.events → staff profiles (DOC 5.6).
@@ -22,7 +22,7 @@ export class AuthEventsConsumer extends BaseConsumer {
     'user.reactivated': (event) => this.received(event),
   };
 
-  private received(event: DomainEvent): Promise<void> {
+  private received(event: DomainEvent<keyof AuthEventPayloads>): Promise<void> {
     this.logger.log(
       `Received ${event.eventType} ${event.eventId} for user ${event.payload.userId}`,
     );

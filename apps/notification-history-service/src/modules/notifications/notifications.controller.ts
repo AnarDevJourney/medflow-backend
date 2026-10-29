@@ -9,15 +9,15 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { CurrentUser, Role, Roles } from '@medflow/common';
+import { Authenticated, CurrentUser } from '@medflow/common';
 import type { CurrentUserData } from '@medflow/common';
 import { ListNotificationsQueryDto } from './dto/list-notifications-query.dto';
 import { NotificationsService } from './notifications.service';
 
-// Own notifications — every role (DOC 8.9)
+// Own notifications — every signed-in user (DOC 8.9)
 @ApiTags('notifications')
 @Controller('notifications')
-@Roles(...Object.values(Role))
+@Authenticated()
 export class NotificationsController {
   constructor(private readonly notifications: NotificationsService) {}
 

@@ -23,7 +23,7 @@ socket.on('connect_error', (err) => {
   print('connect_error', { message: err.message, code: err.data?.code ?? null });
   finish();
 });
-for (const name of ['notification', 'notification:count', 'session:expired', 'session:revoked']) {
+for (const name of ['notification', 'notification:count', 'session:expired', 'session:revoked', 'permissions:updated']) {
   socket.on(name, (data) => print(name, data ?? null));
 }
 socket.on('disconnect', (reason) => {

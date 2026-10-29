@@ -8,6 +8,7 @@ export const Topics = {
   RECORD: 'record.events',
   BILLING: 'billing.events',
   FILE: 'file.events',
+  CONFIGURATIONS: 'configurations.events',
   DEAD_LETTER: 'dead-letter.events',
 } as const;
 

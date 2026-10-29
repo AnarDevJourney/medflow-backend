@@ -14,10 +14,13 @@ import { sendError } from '../common/send-error';
 import { ProxyService } from '../proxy/proxy.service';
 import { AuthenticatedRequest } from './authenticated-request';
 import { isPublicRoute } from './public-routes';
+import { RolePermissionsService } from './role-permissions.service';
 
 // JwtAuthGuard of DOC 1.3 step 4 — an Express middleware because proxied
 // requests never reach Nest's router (so Nest guards would not run).
 // Only the gateway verifies JWTs; services trust the x-user-* headers.
+// It also attaches the role's permissions (Redis), which the services'
+// PermissionGuard checks.
 @Injectable()
 export class AuthMiddleware {
   private readonly logger = new Logger(AuthMiddleware.name);
@@ -25,6 +28,7 @@ export class AuthMiddleware {
   constructor(
     private readonly jwt: JwtService,
     private readonly proxy: ProxyService,
+    private readonly rolePermissions: RolePermissionsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -97,7 +101,25 @@ export class AuthMiddleware {
       );
     }
 
+    // Fail closed as well: without the list no permission can be checked
+    let permissions: string;
+    try {
+      permissions = await this.rolePermissions.forRole(payload.role);
+    } catch (error) {
+      this.logger.error(
+        `Permission lookup failed: ${(error as Error).message}`,
+      );
+      return sendError(
+        req,
+        res,
+        503,
+        ErrorCode.SERVICE_UNAVAILABLE,
+        'Permissions are temporarily unavailable, please try again',
+      );
+    }
+
     req.auth = payload;
+    req.permissions = permissions;
     next();
   }
 }
