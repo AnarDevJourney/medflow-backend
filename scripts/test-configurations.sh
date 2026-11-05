@@ -105,7 +105,7 @@ echo "Table settings"
 T_URL=http://localhost:3000/api/v1/configurations/tables
 tpatch() { as_admin -X PATCH $T_URL/$1 -H 'content-type: application/json' -d "$2"; }
 q "delete from tablesync_settings where user_id='$ADMIN'" >/dev/null
-check "GET unknown table → defaults" '200|{"tableKey":"patients","columns":null,"density":null,"view":null,"updatedAt":null}' "$(as_admin $T_URL/patients)|$(j .)"
+check "GET unknown table → defaults" '200|{"tableKey":"patients","columns":null,"density":null,"view":null,"pageSizeOptions":null,"updatedAt":null}' "$(as_admin $T_URL/patients)|$(j .)"
 check "  GET creates no row" 0 "$(q "select count(*) from tablesync_settings where user_id='$ADMIN'")"
 check "bad table key → 400" 400 "$(as_admin $T_URL/Bad_Key)"
 COLS='[{"key":"mrn","visible":true,"width":120,"pinned":"left"},{"key":"lastName","visible":true,"width":null,"pinned":null},{"key":"createdAt","visible":false,"width":160,"pinned":"right"}]'
@@ -122,6 +122,14 @@ check "width not integer → 400" 400 "$(tpatch patients '{"columns":[{"key":"a"
 check "pinned: middle → 400" 400 "$(tpatch patients '{"columns":[{"key":"a","visible":true,"width":null,"pinned":"middle"}]}')"
 check "visible: \"no\" → 400" 400 "$(tpatch patients '{"columns":[{"key":"a","visible":"no","width":null,"pinned":null}]}')"
 check "density: dense → 400" 400 "$(tpatch patients '{"density":"dense"}')"
+check "page sizes saved, stored as an array" '200|[15,30,75]|array' "$(tpatch patients '{"pageSizeOptions":[15,30,75]}')|$(j .pageSizeOptions)|$(q "select jsonb_typeof(page_size_options) from tablesync_settings where user_id='$ADMIN' and table_key='patients'")"
+check "page size 101 → 400" 400 "$(tpatch patients '{"pageSizeOptions":[101]}')"
+check "page size 0 → 400" 400 "$(tpatch patients '{"pageSizeOptions":[0]}')"
+check "empty page sizes → 400" 400 "$(tpatch patients '{"pageSizeOptions":[]}')"
+check "duplicate page sizes → 400" 400 "$(tpatch patients '{"pageSizeOptions":[10,10]}')"
+check "text page size → 400" 400 "$(tpatch patients '{"pageSizeOptions":["10"]}')"
+check "page sizes kept after bad requests" '[15,30,75]' "$(as_admin $T_URL/patients >/dev/null; j .pageSizeOptions)"
+check "pageSizeOptions: null → default, SQL NULL" '200|null|t' "$(tpatch patients '{"pageSizeOptions":null}')|$(j .pageSizeOptions)|$(q "select page_size_options is null from tablesync_settings where user_id='$ADMIN' and table_key='patients'")"
 check "bad column key → 400" 400 "$(tpatch patients '{"columns":[{"key":"a b","visible":true,"width":null,"pinned":null}]}')"
 check "unknown field → 400" 400 "$(tpatch patients '{"pageSize":50}')"
 check "nothing changed by bad requests" '3|"striped"' "$(as_admin $T_URL/patients >/dev/null; j '.columns|length')|$(j .view)"
@@ -135,6 +143,8 @@ check "  existing table still updatable" 200 "$(tpatch invoices '{"density":"com
 q "delete from tablesync_settings where user_id='$ADMIN'" >/dev/null
 
 echo "Theme settings"
+# The checks above use up most of the gateway's 100 requests a minute
+redis_flush_rl
 TH=http://localhost:3000/api/v1/configurations/theme
 thpatch() { as_admin -X PATCH $TH -H 'content-type: application/json' -d "$1"; }
 q "delete from theme_settings where user_id='$ADMIN'" >/dev/null

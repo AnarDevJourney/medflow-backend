@@ -204,7 +204,7 @@ configurations-service keeps each user's UI configuration (and the permission ma
 | `POST /configurations/sidebar/visits` | all | `{ pageKey }` → 204 |
 | `DELETE /configurations/sidebar/visits` | all | clears frequent + recent, keeps the layout → 204 |
 
-**Table settings** (`table_settings`, PK `(user_id, table_key)`): `columns` (jsonb `[{ key, visible, width, pinned: left|right|null }]` in display order), `density` (`compact | comfortable`), `view` (preset look, e.g. `striped`). `NULL` = the table's default — only the frontend knows a table's columns and defaults, so the backend checks shapes only (column keys unique, width 40–1200). At most 200 tables with saved settings per user.
+**Table settings** (`table_settings`, PK `(user_id, table_key)`): `columns` (jsonb `[{ key, visible, width, pinned: left|right|null }]` in display order), `density` (`compact | comfortable`), `view` (preset look, e.g. `striped`), `page_size_options` (jsonb, the user's pager sizes: 1–10 unique whole numbers from 1 to 100). `NULL` = the table's default — only the frontend knows a table's columns and defaults, so the backend checks shapes only (column keys unique, width 40–1200). At most 200 tables with saved settings per user.
 
 | Route | Who | Notes |
 |---|---|---|
