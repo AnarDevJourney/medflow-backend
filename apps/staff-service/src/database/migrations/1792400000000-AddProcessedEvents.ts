@@ -1,7 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
 // staff_db — DATABASE.md §2: consumer idempotency for auth.events.
-// The staff tables (§4) and outbox_events come with phase 5.
 export class AddProcessedEvents1792400000000 implements MigrationInterface {
   name = 'AddProcessedEvents1792400000000';
 

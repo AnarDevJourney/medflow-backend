@@ -9,14 +9,16 @@ import {
   HistoryTemplates,
   NOT_IN_HISTORY,
 } from './history-template';
+import { staffTemplates } from './staff.templates';
 
 export type NewActionHistory = Omit<ActionHistory, 'id' | 'createdAt'>;
 
 // Every event of the system → its summary template. Each phase spreads the
-// templates of its service in here (staffTemplates, patientTemplates, …).
+// templates of its service in here (patientTemplates, …).
 const TEMPLATES: HistoryTemplates<HistoryEventType> = {
   ...authTemplates,
   ...configurationsTemplates,
+  ...staffTemplates,
 };
 
 const SKIPPED: ReadonlySet<string> = new Set(NOT_IN_HISTORY);

@@ -21,6 +21,7 @@ export * from './health/health.module';
 export * from './interceptors/transform.interceptor';
 export * from './interfaces/current-user.interface';
 export * from './middleware/request-id.middleware';
+export * from './pagination/like-pattern';
 export * from './pagination/paginated';
 export * from './pagination/pagination-query.dto';
 export * from './permissions/permissions';

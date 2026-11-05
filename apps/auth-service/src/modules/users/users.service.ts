@@ -5,6 +5,7 @@ import {
   AppException,
   CurrentUserData,
   ErrorCode,
+  likePattern,
   Paginated,
   paginated,
   parseSort,
@@ -32,10 +33,6 @@ import {
 type UserChanges = Partial<
   Pick<User, 'firstName' | 'lastName' | 'role' | 'avatarFileId'>
 >;
-
-// Escapes LIKE wildcards so a search for "50%" matches literally
-const likePattern = (search: string) =>
-  `%${search.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 @Injectable()
 export class UsersService {

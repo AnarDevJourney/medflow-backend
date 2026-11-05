@@ -117,7 +117,8 @@ services:
       # TODO(phase 5): AUTH_SERVICE_URL=http://auth-service:3001 (internal calls)
     depends_on:
       postgres: { condition: service_healthy }
-      kafka-init: { condition: service_completed_successfully } # consumes auth.events
+      redis: { condition: service_healthy } # department cache + outbox poller (BullMQ)
+      kafka-init: { condition: service_completed_successfully } # consumes auth.events, publishes staff.events
 
   patient-service:
     <<: *service

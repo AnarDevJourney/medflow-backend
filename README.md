@@ -220,6 +220,23 @@ configurations-service keeps each user's UI configuration (and the permission ma
 | `PATCH /configurations/theme` | all | any of the fields above; `null` = back to that default |
 | `DELETE /configurations/theme` | all | reset to the default appearance → 204 |
 
+## Departments (staff-service)
+
+staff-service owns the clinic's departments (`departments` in staff_db, five seeded by the migration). `code` is fixed after creation because billing builds price codes from it (`CONSULT-CARD`). A department is never deleted, only deactivated.
+
+- `GET /departments` serves the active list for pickers from Redis (`staff:departments:active`, 10 min TTL, cleared after every change). A Redis failure only costs a database query.
+- Create and edit write the row and a `staff.events` outbox event in one transaction. An edit locks the row, sends only real changes, and a no-change request publishes nothing.
+- notification-history records `department.created` / `department.updated` in the action history (deactivate and reactivate get their own sentence).
+- A duplicate code or name returns `409 CONFLICT` with `details.field`, so the form can mark the right input.
+- End-to-end check: `./scripts/test-staff.sh`.
+
+| Route | Who | Notes |
+|---|---|---|
+| `GET /departments` | `departments.read` | active departments, cached |
+| `GET /departments/all` | `departments.manage` | inactive too; `search`, `isActive`, `sort`, pages (added to DOC 8.3 for the management page) |
+| `POST /departments` | `departments.manage` | `{ code, name, description?, location?, phone? }` |
+| `PATCH /departments/:id` | `departments.manage` | `name`, `description`, `location`, `phone`, `isActive`; `code` is rejected |
+
 ## Build progress
 
 | Phase | Status |
@@ -234,7 +251,8 @@ configurations-service keeps each user's UI configuration (and the permission ma
 | configurations-service: table settings | ✅ |
 | configurations-service: theme settings | ✅ |
 | Permission-based access control (catalog, Redis cache, PermissionGuard, admin page) | ✅ |
-| 5 staff-service | next |
+| 5.1 staff-service: departments | ✅ |
+| 5.2–5.5 staff-service: profiles, schedules, time off, internal API | next |
 | 6–12 patient, appointment, medical-record, billing, file, frontend, demo seed | — |
 
 Phase 5 starts by replaying `auth.events` for staff-service (`./scripts/kafka-reset-group.sh staff-service auth.events`), so users created before it get their profiles.

@@ -5,5 +5,9 @@ export const envValidationSchema = Joi.object({
   ...baseEnvSchema,
   PORT: Joi.number().default(3002),
   DATABASE_URL: postgresUrl(),
+  // Department cache + outbox poller (BullMQ)
+  REDIS_URL: Joi.string()
+    .uri({ scheme: ['redis', 'rediss'] })
+    .required(),
   KAFKA_BROKERS: kafkaBrokers(),
 });
