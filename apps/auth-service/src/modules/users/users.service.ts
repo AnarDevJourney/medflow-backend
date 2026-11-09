@@ -23,6 +23,7 @@ import { UpdateProfileDto, UpdateUserDto } from './dto/update-user.dto';
 import { User } from './entities/user.entity';
 import { UserStatus } from './entities/user-status.enum';
 import { InvitationsService } from './invitations.service';
+import { StaffClient } from './staff.client';
 import {
   ProfileResponse,
   toProfileResponse,
@@ -43,6 +44,7 @@ export class UsersService {
     private readonly sessions: SessionsService,
     private readonly revocation: TokenRevocationService,
     private readonly outbox: OutboxService,
+    private readonly staff: StaffClient,
   ) {}
 
   async list(query: ListUsersQueryDto): Promise<Paginated<UserResponse>> {
@@ -143,6 +145,9 @@ export class UsersService {
         ErrorCode.CONFLICT,
         'A user with this email already exists',
       );
+    }
+    if (dto.departmentId) {
+      await this.staff.assertAssignableDepartment(dto.departmentId);
     }
 
     const user = await this.dataSource.transaction(async (em) => {

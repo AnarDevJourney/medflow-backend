@@ -13,6 +13,8 @@ export const envValidationSchema = Joi.object({
     .required(),
   KAFKA_BROKERS: kafkaBrokers(),
   FRONTEND_URL: Joi.string().uri().required(),
+  // Invite: the department must exist and be active (GET /internal/departments/:id)
+  STAFF_SERVICE_URL: Joi.string().uri().required(),
 
   // Same secret as the gateway (which verifies the tokens)
   JWT_ACCESS_SECRET: Joi.string().min(32).required(),

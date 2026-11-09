@@ -20,6 +20,16 @@ export class AuthConfigService {
     return this.config.getOrThrow<string>('FRONTEND_URL').replace(/\/+$/, '');
   }
 
+  get staffServiceUrl(): string {
+    return this.config
+      .getOrThrow<string>('STAFF_SERVICE_URL')
+      .replace(/\/+$/, '');
+  }
+
+  get internalApiKey(): string {
+    return this.config.getOrThrow<string>('INTERNAL_API_KEY');
+  }
+
   get jwtAccessSecret(): string {
     return this.config.getOrThrow<string>('JWT_ACCESS_SECRET');
   }

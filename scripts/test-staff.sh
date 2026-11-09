@@ -3,8 +3,10 @@
 # Departments: seed, active list + Redis cache, management list (search,
 # filter, sort, pages), create / edit / deactivate, permissions, validation,
 # conflicts, outbox → Kafka → action history.
+# Profiles: created / synced from auth.events, invite department check,
+# directory, doctors picker, admin edit, own edit, staff.updated history.
 # Needs the Docker stack: ./scripts/run-all.sh, then ./scripts/test-staff.sh
-# Deletes the departments it creates (their history rows stay: append-only).
+# Deletes the departments and users it creates (their history rows stay: append-only).
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 API=http://localhost:3000/api/v1
 DEP=$API/departments
@@ -158,6 +160,95 @@ check "search by location" true "$(as_admin "$DEP/all?search=Building%20B" >/dev
 check "% is literal" 0 "$(as_admin "$DEP/all?search=%25" >/dev/null; j '.meta.total')"
 check "sort code:desc" true "$(as_admin "$DEP/all?sort=code:desc" >/dev/null; j '[.items[].code] == ([.items[].code]|sort|reverse)')"
 check "page size" '2|true' "$(as_admin "$DEP/all?limit=2&page=2" >/dev/null; j '.items|length')|$(j '.meta.total >= 7')"
+
+# ─── Staff profiles (5.2) ────────────────────────────────────────────────────
+redis_flush_rl
+STAFF=$API/staff
+USERS=$API/users
+RUN=$(date +%s%N | tail -c 9)
+CARD=$(sq "select id from departments where code='CARD'")
+PED=$(sq "select id from departments where code='PED'")
+INACTIVE=$ID # ZT1, deactivated above
+invite() { as_admin -X POST $USERS -H 'content-type: application/json' -d "$1"; }
+spatch() { as_admin -X PATCH $STAFF/$1 -H 'content-type: application/json' -d "$2"; }
+# Waits (≤ 20 s) until the staff row matches the SQL condition
+wait_staff() { # user_id condition
+  for _ in $(seq 1 40); do
+    [ "$(sq "select count(*) from staff_members where user_id='$1' and ($2)")" -gt 0 ] && { echo ok; return; }
+    sleep 0.5
+  done
+  echo timeout
+}
+
+echo "Profile from user.invited"
+check "invite with department + title → 201" 201 "$(invite "{\"email\":\"zt-doc-$RUN@medflow.test\",\"firstName\":\"Zaur\",\"lastName\":\"Testov\",\"role\":\"DOCTOR\",\"departmentId\":\"$CARD\",\"title\":\"Cardiologist\"}")"
+U1=$(j .id | tr -d '"')
+check "  profile created" ok "$(wait_staff $U1 "true")"
+check "  copies + department + title" "Zaur|Testov|DOCTOR|INVITED|true|$CARD|Cardiologist" "$(sq "select first_name||'|'||last_name||'|'||role||'|'||status||'|'||is_active||'|'||department_id||'|'||title from staff_members where user_id='$U1'")"
+check "invite with an inactive department → 422" '422|"BUSINESS_RULE"|"departmentId"' "$(invite "{\"email\":\"zt-x-$RUN@medflow.test\",\"firstName\":\"X\",\"lastName\":\"Y\",\"role\":\"NURSE\",\"departmentId\":\"$INACTIVE\"}")|$(j .error.code)|$(j .error.details.field)"
+check "invite with an unknown department → 422" 422 "$(invite "{\"email\":\"zt-x-$RUN@medflow.test\",\"firstName\":\"X\",\"lastName\":\"Y\",\"role\":\"NURSE\",\"departmentId\":\"$(cat /proc/sys/kernel/random/uuid)\"}")"
+check "  no user created" 0 "$(q auth_db "select count(*) from users where email='zt-x-$RUN@medflow.test'")"
+check "invite without department → 201" 201 "$(invite "{\"email\":\"zt-nurse-$RUN@medflow.test\",\"firstName\":\"Nigar\",\"lastName\":\"Testova\",\"role\":\"NURSE\"}")"
+U2=$(j .id | tr -d '"')
+check "  profile without department" ok "$(wait_staff $U2 "department_id is null and title is null")"
+check "resend invite → 200" 200 "$(as_admin -X POST $USERS/$U1/resend-invite)"
+sleep 2
+check "  still CARD + Cardiologist, one row" "$CARD|Cardiologist|1" "$(sq "select department_id||'|'||title||'|'||count(*) over () from staff_members where user_id='$U1'")"
+
+echo "Read"
+check "no cookie → 401" 401 "$(code $STAFF)"
+check "doctor GET /staff/:userId → 200" '200|"Cardiology"|"CARD"' "$(as $DOC $STAFF/$U1)|$(j .department.name)|$(j .department.code)"
+check "  fields" '["bio","createdAt","department","email","firstName","hireDate","isActive","lastName","licenseNumber","phone","role","specialization","status","title","updatedAt","userId"]' "$(j 'keys')"
+check "unknown user → 404" 404 "$(as $DOC $STAFF/$(cat /proc/sys/kernel/random/uuid))"
+check "bad uuid → 400" 400 "$(as $DOC $STAFF/nope)"
+check "doctor directory: only ACTIVE" true "$(as $DOC "$STAFF?limit=100" >/dev/null; j 'all(.items[]; .status == "ACTIVE")')"
+check "  status filter ignored without users.read" true "$(as $DOC "$STAFF?status=INVITED" >/dev/null; j 'all(.items[]; .status == "ACTIVE")')"
+check "admin status=INVITED + search finds the invite" '1|"Zaur"' "$(as_admin "$STAFF?status=INVITED&search=zt-doc-$RUN" >/dev/null; j .meta.total)|$(j '.items[0].firstName')"
+check "admin search by full name" true "$(as_admin "$STAFF?search=Zaur%20Testov" >/dev/null; j "[.items[].userId] | index(\"$U1\") != null")"
+check "role + department filter" true "$(as_admin "$STAFF?role=DOCTOR&departmentId=$CARD&limit=100" >/dev/null; j "all(.items[]; .role == \"DOCTOR\" and .department.code == \"CARD\") and ([.items[].userId] | index(\"$U1\") != null)")"
+check "sort department:asc → 200" 200 "$(as_admin "$STAFF?sort=department:asc")"
+check "bad role → 400" 400 "$(as_admin "$STAFF?role=PILOT")"
+check "accountant GET /staff/doctors → 200" 200 "$(as $ACC "$STAFF/doctors?departmentId=$CARD")"
+check "  only active CARD doctors, includes the invite" true "$(j "all(.[]; .role == \"DOCTOR\" and .department.code == \"CARD\" and .isActive) and ([.[].userId] | index(\"$U1\") != null)")"
+
+echo "Admin edit"
+check "doctor PATCH → 403" 403 "$(as $DOC -X PATCH $STAFF/$U1 -H 'content-type: application/json' -d '{"title":"x"}')"
+check "PATCH → 200" "200|\"Senior Cardiologist\"|\"Interventional\"|\"ZT-LIC-$RUN\"|\"2024-09-01\"" "$(spatch $U1 "{\"title\":\" Senior Cardiologist \",\"specialization\":\"Interventional\",\"licenseNumber\":\"ZT-LIC-$RUN\",\"hireDate\":\"2024-09-01\"}")|$(j .title)|$(j .specialization)|$(j .licenseNumber)|$(j .hireDate)"
+check "  event" '["title","specialization","licenseNumber","hireDate"]|STAFF_MEMBER|Cardiology' "$(sq "select (payload->'payload'->'changedFields')::text||'|'||aggregate_type||'|'||(payload->'payload'->>'departmentName') from outbox_events where aggregate_id='$U1' and event_type='staff.updated' order by occurred_at desc limit 1" | sed 's/, /,/g')"
+check "  history" staff.updated "$(wait_history staff.updated $U1)"
+check "  history entity" "STAFF_MEMBER|Zaur Testov" "$(hq "select entity_type||'|'||(summary_params->>'name') from action_history where summary_key='staff.updated' and entity_id='$U1' limit 1")"
+check "move to PED → 200" '200|"PED"' "$(spatch $U1 "{\"departmentId\":\"$PED\"}")|$(j .department.code)"
+check "inactive department → 422" '422|"departmentId"' "$(spatch $U1 "{\"departmentId\":\"$INACTIVE\"}")|$(j .error.details.field)"
+check "unknown department → 422" 422 "$(spatch $U1 "{\"departmentId\":\"$(cat /proc/sys/kernel/random/uuid)\"}")"
+check "department null → 200" '200|null' "$(spatch $U1 '{"departmentId":null}')|$(j .department)"
+check "same licence on another person → 409" '409|"licenseNumber"' "$(spatch $U2 "{\"licenseNumber\":\"ZT-LIC-$RUN\"}")|$(j .error.details.field)"
+check "bad hireDate → 400" 400 "$(spatch $U1 '{"hireDate":"2024-13-01"}')"
+check "bad phone → 400" 400 "$(spatch $U1 '{"phone":"call me"}')"
+check "name is not editable here → 400" 400 "$(spatch $U1 '{"firstName":"X"}')"
+BEFORE=$(sq "select count(*) from outbox_events")
+check "same values → 200, no event" '200|0' "$(spatch $U1 '{"title":"Senior Cardiologist"}')|$(( $(sq "select count(*) from outbox_events") - BEFORE ))"
+check "unknown user → 404" 404 "$(spatch $(cat /proc/sys/kernel/random/uuid) '{"title":"x"}')"
+
+echo "Own profile"
+SELF=$(node scripts/lib/sign-token.mjs "$SECRET" "$U1" DOCTOR 300)
+check "GET /staff/me → 200" "200|\"$U1\"" "$(as $SELF $STAFF/me)|$(j .userId)"
+check "PATCH /staff/me phone + bio → 200" '200|"+994 50 111 22 33"|"Heart doctor"' "$(as $SELF -X PATCH $STAFF/me -H 'content-type: application/json' -d '{"phone":"+994 50 111 22 33","bio":"Heart doctor"}')|$(j .phone)|$(j .bio)"
+check "  history: own edit" staff.profileUpdated "$(wait_history staff.profileUpdated $U1)"
+check "own title → 400" 400 "$(as $SELF -X PATCH $STAFF/me -H 'content-type: application/json' -d '{"title":"Chief"}')"
+check "no profile → 404" 404 "$(as $DOC $STAFF/me)"
+
+echo "Sync from auth"
+check "rename in auth → 200" 200 "$(as_admin -X PATCH $USERS/$U1 -H 'content-type: application/json' -d '{"firstName":"Zaurbek"}')"
+check "  name copied" ok "$(wait_staff $U1 "first_name = 'Zaurbek'")"
+check "deactivate in auth → 200" 200 "$(as_admin -X PATCH $USERS/$U1/deactivate)"
+check "  DEACTIVATED, not active" ok "$(wait_staff $U1 "status = 'DEACTIVATED' and not is_active")"
+check "  gone from /staff/doctors" false "$(as $ACC "$STAFF/doctors" >/dev/null; j "[.[].userId] | index(\"$U1\") != null")"
+check "  profile still readable" '200|false' "$(as $DOC $STAFF/$U1)|$(j .isActive)"
+check "reactivate in auth → 200" 200 "$(as_admin -X PATCH $USERS/$U1/reactivate)"
+check "  INVITED again, active" ok "$(wait_staff $U1 "status = 'INVITED' and is_active")"
+
+sq "delete from staff_members where user_id in ('$U1','$U2')" >/dev/null
+q auth_db "delete from users where id in ('$U1','$U2')" >/dev/null
 
 cleanup
 rm -rf $D

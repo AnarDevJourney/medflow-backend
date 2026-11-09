@@ -113,7 +113,7 @@ Endpoints (prefix `/api/v1`, DOC 8.2):
 - Consumer group = service name. `./scripts/kafka-reset-group.sh <service> <topic>` replays a topic for one service.
 - End-to-end check (stops Kafka once): `./scripts/test-kafka.sh`.
 
-Published so far (`auth.events`, key = user id): `user.invited` (`resent: true` on resend-invite), `user.activated`, `user.updated` (`changedFields`), `user.deactivated`, `user.reactivated`, `user.session_revoked` (`email`, `firstName`), `user.password_reset_requested`, `user.password_changed` (`via: RESET | CHANGE`). Not in the DOC 5.6 catalog: `user.reactivated`, `changedFields`, `via`, `email`/`firstName` on `user.session_revoked`. Consumed by staff-service (log-only until phase 5) and notification-history (action history, notifications, emails).
+Published so far (`auth.events`, key = user id): `user.invited` (`resent: true` on resend-invite), `user.activated`, `user.updated` (`changedFields`), `user.deactivated`, `user.reactivated`, `user.session_revoked` (`email`, `firstName`), `user.password_reset_requested`, `user.password_changed` (`via: RESET | CHANGE`). Not in the DOC 5.6 catalog: `user.reactivated`, `changedFields`, `via`, `email`/`firstName` on `user.session_revoked`. Consumed by staff-service (staff profiles) and notification-history (action history, notifications, emails).
 
 ## Action history
 
@@ -236,6 +236,28 @@ staff-service owns the clinic's departments (`departments` in staff_db, five see
 | `GET /departments/all` | `departments.manage` | inactive too; `search`, `isActive`, `sort`, pages (added to DOC 8.3 for the management page) |
 | `POST /departments` | `departments.manage` | `{ code, name, description?, location?, phone? }` |
 | `PATCH /departments/:id` | `departments.manage` | `name`, `description`, `location`, `phone`, `isActive`; `code` is rejected |
+| `GET /internal/departments/:id` | internal | `{ id, code, name, isActive }` — auth checks an invite's department here |
+
+## Staff profiles (staff-service)
+
+One `staff_members` row per auth user. staff-service builds it from `auth.events` (in the consumer's transaction, with `processed_events`):
+
+- `user.invited` creates the profile with the invite's `departmentId` and `title`. A resent invite or a replay only refreshes the copied account fields; department and title stay.
+- `user.activated` sets `ACTIVE`, `user.updated` copies name / email / role, `user.deactivated` and `user.reactivated` set `status` and `is_active`.
+- Name, email, role and status are copies: they change only through auth. Our addition to DATABASE.md: the `status` column (INVITED / ACTIVE / DEACTIVATED), so the staff page can show and filter it without asking auth.
+- Invite: auth asks staff-service (`GET /internal/departments/:id`, needs `STAFF_SERVICE_URL`). An unknown or inactive department → `422 BUSINESS_RULE` with `details.field = departmentId`, and staff-service down → `503`. The invite is not created in either case.
+- An admin edit or an own edit writes `staff.updated` (`changedFields`, aggregate `STAFF_MEMBER`, key = user id) to the outbox. No change → no event. notification-history records it (the own edit gets its own sentence).
+- A deactivated department stays on the people who have it; it is refused only as a new choice.
+- A licence number used by someone else → `409 CONFLICT` with `details.field = licenseNumber`.
+
+| Route | Who | Notes |
+|---|---|---|
+| `GET /staff` | `staff.read` | directory; `search` (name, email), `role`, `departmentId`, `status`, `sort` (name, email, role, status, department, hireDate, createdAt), pages. Without `users.read` only `ACTIVE` people are listed and `status` is ignored |
+| `GET /staff/doctors` | `staff.read` | doctors who are not deactivated, by name; `departmentId` |
+| `GET /staff/me` | signed in | own profile (our addition, for the profile page) |
+| `PATCH /staff/me` | signed in | own `phone`, `bio` |
+| `GET /staff/:userId` | `staff.read` | one profile |
+| `PATCH /staff/:userId` | `staff.update` | `departmentId` (active, or null), `title`, `specialization`, `licenseNumber`, `phone`, `hireDate` (YYYY-MM-DD), `bio`; null clears a field |
 
 ## Build progress
 
@@ -252,10 +274,11 @@ staff-service owns the clinic's departments (`departments` in staff_db, five see
 | configurations-service: theme settings | ✅ |
 | Permission-based access control (catalog, Redis cache, PermissionGuard, admin page) | ✅ |
 | 5.1 staff-service: departments | ✅ |
-| 5.2–5.5 staff-service: profiles, schedules, time off, internal API | next |
+| 5.2 staff-service: staff profiles | ✅ |
+| 5.3–5.5 staff-service: schedules, time off, internal API | next |
 | 6–12 patient, appointment, medical-record, billing, file, frontend, demo seed | — |
 
-Phase 5 starts by replaying `auth.events` for staff-service (`./scripts/kafka-reset-group.sh staff-service auth.events`), so users created before it get their profiles.
+Profiles of users created before 5.2 came from re-publishing auth's outbox rows: truncate staff `processed_events`, then `UPDATE outbox_events SET published_at = NULL, attempts = 0 WHERE event_type IN ('user.invited','user.activated','user.updated','user.deactivated','user.reactivated')` in auth_db. The other consumers skip the repeats (unique event ids; sent emails are not sent again). Kafka alone could not do it: messages from before the volume fix are gone.
 
 ## Migrations
 

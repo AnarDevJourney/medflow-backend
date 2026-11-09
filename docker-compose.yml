@@ -96,6 +96,7 @@ services:
       JWT_ACCESS_TTL: 15m
       JWT_REFRESH_TTL: 7d
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173} # invite / reset links
+      STAFF_SERVICE_URL: http://staff-service:3002 # invite: department check
       # Demo admin — TODO(prod): real credentials or remove after first login
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@medflow.az}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-Admin12345}
@@ -114,7 +115,6 @@ services:
       <<: *common-env
       PORT: 3002
       DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/staff_db
-      # TODO(phase 5): AUTH_SERVICE_URL=http://auth-service:3001 (internal calls)
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy } # department cache + outbox poller (BullMQ)

@@ -1,31 +1,24 @@
 import { Injectable } from '@nestjs/common';
 import { Topics } from '@medflow/contracts';
-import type { AuthEventPayloads, DomainEvent } from '@medflow/contracts';
 import { BaseConsumer, EventHandlers } from '@medflow/kafka';
+import { StaffSyncService } from '../modules/staff/staff-sync.service';
 
-// auth.events → staff profiles (DOC 5.6).
-// TODO(phase 5): real handlers — create the profile on user.invited (skip
-// resent), sync on user.updated, is_active on user.deactivated/reactivated.
-// Until then every event is only recorded in processed_events and logged,
-// which proves the outbox → Kafka → consumer path. Phase 5 must replay the
-// topic for this group (truncate processed_events + reset the group offsets
-// to the earliest, see scripts/kafka-reset-group.sh), otherwise the users
-// that exist now never get a profile.
+// auth.events → staff profiles (DOC 5.6). Each handler runs in the base
+// class's transaction together with the processed_events row.
 @Injectable()
 export class AuthEventsConsumer extends BaseConsumer {
   protected readonly topic = Topics.AUTH;
   protected readonly handlers: EventHandlers = {
-    'user.invited': (event) => this.received(event),
-    'user.activated': (event) => this.received(event),
-    'user.updated': (event) => this.received(event),
-    'user.deactivated': (event) => this.received(event),
-    'user.reactivated': (event) => this.received(event),
+    'user.invited': (event, em) => this.sync.onInvited(event.payload, em),
+    'user.activated': (event, em) => this.sync.onActivated(event.payload, em),
+    'user.updated': (event, em) => this.sync.onUpdated(event.payload, em),
+    'user.deactivated': (event, em) =>
+      this.sync.onDeactivated(event.payload, em),
+    'user.reactivated': (event, em) =>
+      this.sync.onReactivated(event.payload, em),
   };
 
-  private received(event: DomainEvent<keyof AuthEventPayloads>): Promise<void> {
-    this.logger.log(
-      `Received ${event.eventType} ${event.eventId} for user ${event.payload.userId}`,
-    );
-    return Promise.resolve();
+  constructor(private readonly sync: StaffSyncService) {
+    super();
   }
 }
