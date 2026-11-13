@@ -113,7 +113,10 @@ export class StaffService {
       );
     }
 
-    const sort = parseSort(query.sort, STAFF_SORT_FIELDS, { name: 'ASC' });
+    // Newest first by default, like every list in the app
+    const sort = parseSort(query.sort, STAFF_SORT_FIELDS, {
+      createdAt: 'DESC',
+    });
     for (const [field, direction] of Object.entries(sort)) {
       for (const column of SORT_COLUMNS[field as keyof typeof SORT_COLUMNS]) {
         qb.addOrderBy(column, direction, 'NULLS LAST');

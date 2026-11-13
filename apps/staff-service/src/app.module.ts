@@ -7,6 +7,7 @@ import { KafkaConsumerModule, KafkaModule, OutboxModule } from '@medflow/kafka';
 import { envValidationSchema } from './config/env.validation';
 import { AuthEventsConsumer } from './consumers/auth-events.consumer';
 import { DepartmentsModule } from './modules/departments/departments.module';
+import { SchedulesModule } from './modules/schedules/schedules.module';
 import { StaffModule } from './modules/staff/staff.module';
 
 @Module({
@@ -22,6 +23,7 @@ import { StaffModule } from './modules/staff/staff.module';
     HealthModule,
     DepartmentsModule,
     StaffModule,
+    SchedulesModule,
   ],
   providers: [AuthEventsConsumer],
 })

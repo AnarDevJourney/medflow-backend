@@ -96,7 +96,10 @@ export class DepartmentsService {
       );
     }
 
-    const sort = parseSort(query.sort, DEPARTMENT_SORT_FIELDS, { name: 'ASC' });
+    // Newest first by default, like every list in the app
+    const sort = parseSort(query.sort, DEPARTMENT_SORT_FIELDS, {
+      createdAt: 'DESC',
+    });
     for (const [field, direction] of Object.entries(sort)) {
       qb.addOrderBy(`department.${field}`, direction);
     }

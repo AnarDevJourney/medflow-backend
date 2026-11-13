@@ -5,6 +5,8 @@
 # conflicts, outbox → Kafka → action history.
 # Profiles: created / synced from auth.events, invite department check,
 # directory, doctors picker, admin edit, own edit, staff.updated history.
+# Schedules: read rules (read / read_own), replace the week, validation,
+# doctor-only, deactivated → 409, schedule.updated history.
 # Needs the Docker stack: ./scripts/run-all.sh, then ./scripts/test-staff.sh
 # Deletes the departments and users it creates (their history rows stay: append-only).
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -150,7 +152,7 @@ echo "Management list"
 check "doctor GET /all → 403" 403 "$(as $DOC $DEP/all)"
 check "admin GET /all → 200 with meta" '200|1|20' "$(as_admin $DEP/all)|$(j .meta.page)|$(j .meta.limit)"
 check "  inactive included" 1 "$(j '[.items[]|select(.code=="ZT1")]|length')"
-check "  sorted by name by default" true "$(j '[.items[].name] == ([.items[].name]|sort)')"
+check "  newest first by default" true "$(j '[.items[].createdAt] == ([.items[].createdAt]|sort|reverse)')"
 check "isActive=false" true "$(as_admin "$DEP/all?isActive=false" >/dev/null; j 'all(.items[]; .isActive == false) and (.items|length) >= 1')"
 check "isActive=true" true "$(as_admin "$DEP/all?isActive=true" >/dev/null; j 'all(.items[]; .isActive) and (.items|length) >= 5')"
 check "bad isActive → 400" 400 "$(as_admin "$DEP/all?isActive=maybe")"
@@ -206,6 +208,7 @@ check "  status filter ignored without users.read" true "$(as $DOC "$STAFF?statu
 check "admin status=INVITED + search finds the invite" '1|"Zaur"' "$(as_admin "$STAFF?status=INVITED&search=zt-doc-$RUN" >/dev/null; j .meta.total)|$(j '.items[0].firstName')"
 check "admin search by full name" true "$(as_admin "$STAFF?search=Zaur%20Testov" >/dev/null; j "[.items[].userId] | index(\"$U1\") != null")"
 check "role + department filter" true "$(as_admin "$STAFF?role=DOCTOR&departmentId=$CARD&limit=100" >/dev/null; j "all(.items[]; .role == \"DOCTOR\" and .department.code == \"CARD\") and ([.items[].userId] | index(\"$U1\") != null)")"
+check "newest first by default" true "$(as_admin "$STAFF?limit=100" >/dev/null; j '[.items[].createdAt] == ([.items[].createdAt]|sort|reverse)')"
 check "sort department:asc → 200" 200 "$(as_admin "$STAFF?sort=department:asc")"
 check "bad role → 400" 400 "$(as_admin "$STAFF?role=PILOT")"
 check "accountant GET /staff/doctors → 200" 200 "$(as $ACC "$STAFF/doctors?departmentId=$CARD")"
@@ -237,11 +240,54 @@ check "  history: own edit" staff.profileUpdated "$(wait_history staff.profileUp
 check "own title → 400" 400 "$(as $SELF -X PATCH $STAFF/me -H 'content-type: application/json' -d '{"title":"Chief"}')"
 check "no profile → 404" 404 "$(as $DOC $STAFF/me)"
 
+echo "Schedules"
+SCH=$API/schedules
+REC=$(node scripts/lib/sign-token.mjs "$SECRET" "$(cat /proc/sys/kernel/random/uuid)" RECEPTIONIST 300)
+put() { as_admin -X PUT $SCH/$1 -H 'content-type: application/json' -d "$2"; }
+WEEK='{"days":[{"dayOfWeek":3,"startTime":"10:00","endTime":"14:00","slotMinutes":20},{"dayOfWeek":1,"startTime":"09:00","endTime":"17:00","slotMinutes":30}]}'
+check "empty week at first" '200|[]' "$(as_admin $SCH/$U1)|$(j .days)"
+check "no cookie → 401" 401 "$(code $SCH/$U1)"
+check "accountant → 403" 403 "$(as $ACC $SCH/$U1)"
+check "doctor reads another's week → 403" 403 "$(as $DOC $SCH/$U1)"
+check "doctor reads own week → 200" 200 "$(as $SELF $SCH/$U1)"
+check "receptionist reads → 200" 200 "$(as $REC $SCH/$U1)"
+check "unknown user → 404" 404 "$(as_admin $SCH/$(cat /proc/sys/kernel/random/uuid))"
+check "bad uuid → 400" 400 "$(as_admin $SCH/nope)"
+check "doctor PUT → 403" 403 "$(as $SELF -X PUT $SCH/$U1 -H 'content-type: application/json' -d "$WEEK")"
+check "receptionist PUT → 403" 403 "$(as $REC -X PUT $SCH/$U1 -H 'content-type: application/json' -d "$WEEK")"
+check "PUT week → 200, Monday first" '200|[1,3]|"09:00"|20' "$(put $U1 "$WEEK")|$(j '[.days[].dayOfWeek]')|$(j '.days[0].startTime')|$(j '.days[1].slotMinutes')"
+check "  rows" '1|09:00:00|17:00:00|30;3|10:00:00|14:00:00|20' "$(sq "select string_agg(day_of_week||'|'||start_time||'|'||end_time||'|'||slot_minutes, ';' order by day_of_week) from doctor_schedules d join staff_members s on s.id = d.staff_member_id where s.user_id='$U1'")"
+check "  GET returns it" '[1,3]|"17:00"' "$(as $REC $SCH/$U1 >/dev/null; j '[.days[].dayOfWeek]')|$(j '.days[0].endTime')"
+check "  event" 'schedule.updated|STAFF_MEMBER|[1,3]|[]' "$(sq "select event_type||'|'||aggregate_type||'|'||(payload->'payload'->'changedDays')::text||'|'||(payload->'payload'->'previousDays')::text from outbox_events where aggregate_id='$U1' and event_type='schedule.updated' order by occurred_at desc limit 1" | sed 's/, /,/g')"
+check "  history" schedule.updated "$(wait_history schedule.updated $U1)"
+check "  history params" 'Zaur Testov|["1","3"]' "$(hq "select (summary_params->>'name')||'|'||(summary_params->'days')::text from action_history where summary_key='schedule.updated' and entity_id='$U1' limit 1" | sed 's/, /,/g')"
+BEFORE=$(sq "select count(*) from outbox_events")
+check "same week again → 200, no event" '200|0' "$(put $U1 "$WEEK")|$(( $(sq "select count(*) from outbox_events") - BEFORE ))"
+check "change Wed, drop Mon, add Fri → 200" '200|[3,5]' "$(put $U1 '{"days":[{"dayOfWeek":3,"startTime":"10:00","endTime":"15:00","slotMinutes":20},{"dayOfWeek":5,"startTime":"08:00","endTime":"12:00","slotMinutes":60}]}')|$(j '[.days[].dayOfWeek]')"
+check "  changedDays" '[1,3,5]' "$(sq "select (payload->'payload'->'changedDays')::text from outbox_events where aggregate_id='$U1' and event_type='schedule.updated' order by occurred_at desc limit 1" | sed 's/, /,/g')"
+check "  Wednesday row kept (updated in place)" 2 "$(sq "select count(*) from doctor_schedules d join staff_members s on s.id = d.staff_member_id where s.user_id='$U1'")"
+check "duplicate day → 422" '422|"days.1.dayOfWeek"' "$(put $U1 '{"days":[{"dayOfWeek":2,"startTime":"09:00","endTime":"10:00","slotMinutes":30},{"dayOfWeek":2,"startTime":"11:00","endTime":"12:00","slotMinutes":30}]}')|$(j .error.details.field)"
+check "end before start → 422" '422|"days.0.endTime"' "$(put $U1 '{"days":[{"dayOfWeek":2,"startTime":"12:00","endTime":"09:00","slotMinutes":30}]}')|$(j .error.details.field)"
+check "half slot at the end → 422" 422 "$(put $U1 '{"days":[{"dayOfWeek":2,"startTime":"09:00","endTime":"16:50","slotMinutes":30}]}')"
+check "slot 25 → 400" 400 "$(put $U1 '{"days":[{"dayOfWeek":2,"startTime":"09:00","endTime":"10:00","slotMinutes":25}]}')"
+check "day 8 → 400" 400 "$(put $U1 '{"days":[{"dayOfWeek":8,"startTime":"09:00","endTime":"10:00","slotMinutes":30}]}')"
+check "time 24:00 → 400" 400 "$(put $U1 '{"days":[{"dayOfWeek":2,"startTime":"09:00","endTime":"24:00","slotMinutes":30}]}')"
+check "no days field → 400" 400 "$(put $U1 '{}')"
+check "  week unchanged after errors" '[3,5]' "$(as_admin $SCH/$U1 >/dev/null; j '[.days[].dayOfWeek]')"
+check "nurse → 422 (doctors only)" '422|"role"' "$(put $U2 "$WEEK")|$(j .error.details.field)"
+check "nurse GET → empty week" '200|[]' "$(as_admin $SCH/$U2)|$(j .days)"
+check "unknown user PUT → 404" 404 "$(put $(cat /proc/sys/kernel/random/uuid) "$WEEK")"
+check "clear the week → 200" '200|[]' "$(put $U1 '{"days":[]}')|$(j .days)"
+check "  history: cleared" schedule.cleared "$(wait_history schedule.cleared $U1)"
+put $U1 "$WEEK" >/dev/null
+
 echo "Sync from auth"
 check "rename in auth → 200" 200 "$(as_admin -X PATCH $USERS/$U1 -H 'content-type: application/json' -d '{"firstName":"Zaurbek"}')"
 check "  name copied" ok "$(wait_staff $U1 "first_name = 'Zaurbek'")"
 check "deactivate in auth → 200" 200 "$(as_admin -X PATCH $USERS/$U1/deactivate)"
 check "  DEACTIVATED, not active" ok "$(wait_staff $U1 "status = 'DEACTIVATED' and not is_active")"
+check "  schedule locked → 409" '409|"INVALID_STATUS"' "$(put $U1 "$WEEK")|$(j .error.code)"
+check "  schedule still readable" '200|[1,3]' "$(as_admin $SCH/$U1)|$(j '[.days[].dayOfWeek]')"
 check "  gone from /staff/doctors" false "$(as $ACC "$STAFF/doctors" >/dev/null; j "[.[].userId] | index(\"$U1\") != null")"
 check "  profile still readable" '200|false' "$(as $DOC $STAFF/$U1)|$(j .isActive)"
 check "reactivate in auth → 200" 200 "$(as_admin -X PATCH $USERS/$U1/reactivate)"

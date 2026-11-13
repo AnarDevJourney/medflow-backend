@@ -87,4 +87,28 @@ export const staffTemplates: HistoryTemplates<
       },
     };
   },
+
+  // Entity = the doctor (user id). Params carry ISO weekday numbers as
+  // strings ('1' = Monday); the UI names them. An empty week reads
+  // "cleared".
+  'schedule.updated': (event) => {
+    const p = event.payload;
+    const name = `${p.firstName} ${p.lastName}`;
+    const days = p.changedDays.map(String);
+    const cleared = p.days.length === 0;
+    return {
+      entityType: STAFF_MEMBER,
+      entityId: p.userId,
+      summary: cleared
+        ? `${actorName(event)} cleared the weekly schedule of ${name}`
+        : `${actorName(event)} changed the weekly schedule of ${name} (days ${days.join(', ')})`,
+      message: cleared
+        ? message('schedule.cleared', { actor: actor(event), name })
+        : message('schedule.updated', { actor: actor(event), name, days }),
+      metadata: {
+        changedDays: p.changedDays,
+        workingDays: p.days.length,
+      },
+    };
+  },
 };
