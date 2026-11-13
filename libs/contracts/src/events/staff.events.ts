@@ -1,12 +1,15 @@
 // staff.events — published by staff-service. History only (DOC 5.6).
 // department.* : aggregate DEPARTMENT, key = department id.
-// staff.updated, schedule.updated: aggregate STAFF_MEMBER, key = user id.
+// staff.updated, schedule.updated, time_off.*: aggregate STAFF_MEMBER,
+// key = user id.
 
 export const StaffEvents = {
   DEPARTMENT_CREATED: 'department.created',
   DEPARTMENT_UPDATED: 'department.updated',
   STAFF_UPDATED: 'staff.updated',
   SCHEDULE_UPDATED: 'schedule.updated',
+  TIME_OFF_CREATED: 'time_off.created',
+  TIME_OFF_DELETED: 'time_off.deleted',
 } as const;
 
 export interface DepartmentCreatedPayload {
@@ -58,9 +61,26 @@ export interface ScheduleUpdatedPayload {
   changedDays: number[];
 }
 
+// A doctor's leave period was added or removed. Dates 'YYYY-MM-DD', end
+// inclusive; type = DAY_OFF | VACATION | SICK_LEAVE | TRAINING. The free-text
+// reason stays in staff-service (it may name an illness).
+export interface TimeOffPayload {
+  timeOffId: string;
+  userId: string;
+  staffMemberId: string;
+  firstName: string;
+  lastName: string;
+  type: string;
+  startDate: string;
+  endDate: string;
+  days: number;
+}
+
 export interface StaffEventPayloads {
   [StaffEvents.DEPARTMENT_CREATED]: DepartmentCreatedPayload;
   [StaffEvents.DEPARTMENT_UPDATED]: DepartmentUpdatedPayload;
   [StaffEvents.STAFF_UPDATED]: StaffUpdatedPayload;
   [StaffEvents.SCHEDULE_UPDATED]: ScheduleUpdatedPayload;
+  [StaffEvents.TIME_OFF_CREATED]: TimeOffPayload;
+  [StaffEvents.TIME_OFF_DELETED]: TimeOffPayload;
 }

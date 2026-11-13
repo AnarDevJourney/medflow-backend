@@ -111,4 +111,45 @@ export const staffTemplates: HistoryTemplates<
       },
     };
   },
+
+  // Params: type code (VACATION …) and 'YYYY-MM-DD' dates — the UI names
+  // the type and formats the days. The reason never reaches history.
+  'time_off.created': (event) => timeOffEntry(event, 'added'),
+  'time_off.deleted': (event) => timeOffEntry(event, 'removed'),
 };
+
+const TIME_OFF_TYPES: Record<string, string> = {
+  DAY_OFF: 'a day off',
+  VACATION: 'a vacation',
+  SICK_LEAVE: 'a sick leave',
+  TRAINING: 'a training',
+};
+
+function timeOffEntry(
+  event: DomainEvent<'time_off.created' | 'time_off.deleted'>,
+  verb: 'added' | 'removed',
+) {
+  const p = event.payload;
+  const name = `${p.firstName} ${p.lastName}`;
+  const period =
+    p.startDate === p.endDate ? p.startDate : `${p.startDate} – ${p.endDate}`;
+  const what = TIME_OFF_TYPES[p.type] ?? p.type;
+  return {
+    entityType: STAFF_MEMBER,
+    entityId: p.userId,
+    summary: `${actorName(event)} ${verb} ${what} for ${name} (${period})`,
+    message: message(verb === 'added' ? 'timeOff.created' : 'timeOff.deleted', {
+      actor: actor(event),
+      name,
+      type: p.type,
+      start: p.startDate,
+      end: p.endDate,
+    }),
+    metadata: {
+      type: p.type,
+      startDate: p.startDate,
+      endDate: p.endDate,
+      days: p.days,
+    },
+  };
+}

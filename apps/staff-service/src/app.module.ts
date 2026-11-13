@@ -9,6 +9,7 @@ import { AuthEventsConsumer } from './consumers/auth-events.consumer';
 import { DepartmentsModule } from './modules/departments/departments.module';
 import { SchedulesModule } from './modules/schedules/schedules.module';
 import { StaffModule } from './modules/staff/staff.module';
+import { TimeOffModule } from './modules/time-off/time-off.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { StaffModule } from './modules/staff/staff.module';
     DepartmentsModule,
     StaffModule,
     SchedulesModule,
+    TimeOffModule,
   ],
   providers: [AuthEventsConsumer],
 })

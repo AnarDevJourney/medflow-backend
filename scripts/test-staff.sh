@@ -7,6 +7,8 @@
 # directory, doctors picker, admin edit, own edit, staff.updated history.
 # Schedules: read rules (read / read_own), replace the week, validation,
 # doctor-only, deactivated → 409, schedule.updated history.
+# Time off: add / list / remove, overlap → 409 (exclusion constraint),
+# date rules, ended periods kept, time_off.* history.
 # Needs the Docker stack: ./scripts/run-all.sh, then ./scripts/test-staff.sh
 # Deletes the departments and users it creates (their history rows stay: append-only).
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -281,6 +283,50 @@ check "clear the week → 200" '200|[]' "$(put $U1 '{"days":[]}')|$(j .days)"
 check "  history: cleared" schedule.cleared "$(wait_history schedule.cleared $U1)"
 put $U1 "$WEEK" >/dev/null
 
+echo "Time off"
+TO=$API/time-off
+day() { date -d "$1 days" +%F; } # day <offset from today>
+addoff() { as_admin -X POST $TO -H 'content-type: application/json' -d "$1"; }
+off() { echo "{\"userId\":\"$1\",\"type\":\"$2\",\"startDate\":\"$(day $3)\",\"endDate\":\"$(day $4)\"$5}"; }
+check "doctor POST → 403" 403 "$(as $SELF -X POST $TO -H 'content-type: application/json' -d "$(off $U1 VACATION 10 14)")"
+check "receptionist POST → 403" 403 "$(as $REC -X POST $TO -H 'content-type: application/json' -d "$(off $U1 VACATION 10 14)")"
+check "add vacation → 201" "201|\"VACATION\"|5|\"Annual leave\"|\"$(day 10)\"" "$(addoff "$(off $U1 VACATION 10 14 ',"reason":"  Annual leave "')")|$(j .type)|$(j .days)|$(j .reason)|$(j .startDate)"
+T1=$(j .id | tr -d '"')
+check "  person + creator" '"Zaur"|"System Administrator"' "$(j .firstName)|$(j .createdByName)"
+check "  event" "time_off.created|STAFF_MEMBER|VACATION|5|null" "$(sq "select event_type||'|'||aggregate_type||'|'||(payload->'payload'->>'type')||'|'||(payload->'payload'->>'days')||'|'||coalesce(payload->'payload'->>'reason','null') from outbox_events where aggregate_id='$U1' and event_type='time_off.created' order by occurred_at desc limit 1")"
+check "  history" timeOff.created "$(wait_history timeOff.created $U1)"
+check "  history params" "VACATION|$(day 10)|$(day 14)" "$(hq "select (summary_params->>'type')||'|'||(summary_params->>'start')||'|'||(summary_params->>'end') from action_history where summary_key='timeOff.created' and entity_id='$U1' limit 1")"
+check "overlap → 409" '409|"CONFLICT"|"startDate"' "$(addoff "$(off $U1 SICK_LEAVE 12 20)")|$(j .error.code)|$(j .error.details.field)"
+check "inside another → 409" 409 "$(addoff "$(off $U1 DAY_OFF 11 11)")"
+check "adjacent day → 201" '201|1' "$(addoff "$(off $U1 DAY_OFF 15 15)")|$(j .days)"
+T2=$(j .id | tr -d '"')
+check "end before start → 422" '422|"endDate"' "$(addoff "$(off $U1 TRAINING 30 29)")|$(j .error.details.field)"
+check "longer than 365 days → 422" 422 "$(addoff "$(off $U1 VACATION 400 765)")"
+check "365 days → 201" 201 "$(addoff "$(off $U1 TRAINING 1000 1364)")"
+T3=$(j .id | tr -d '"')
+check "bad type → 400" 400 "$(addoff "$(off $U1 HOLIDAY 40 41)")"
+check "bad date → 400" 400 "$(addoff "{\"userId\":\"$U1\",\"type\":\"DAY_OFF\",\"startDate\":\"2026-02-30\",\"endDate\":\"2026-03-01\"}")"
+check "nurse → 422" '422|"userId"' "$(addoff "$(off $U2 VACATION 10 12)")|$(j .error.details.field)"
+check "unknown user → 404" 404 "$(addoff "$(off $(cat /proc/sys/kernel/random/uuid) VACATION 10 12)")"
+check "past sick leave → 201 (recorded later)" 201 "$(addoff "$(off $U1 SICK_LEAVE -5 -3)")"
+T4=$(j .id | tr -d '"')
+check "list for the doctor → 200, newest first" "200|4|\"$T4\"" "$(as $REC "$TO?userId=$U1")|$(j .meta.total)|$(j '.items[0].id')"
+check "  sort startDate:asc" "\"$T4\"|\"$T3\"" "$(as $REC "$TO?userId=$U1&sort=startDate:asc" >/dev/null; j '.items[0].id')|$(j '.items[-1].id')"
+check "  scope=upcoming" 3 "$(as $REC "$TO?userId=$U1&scope=upcoming" >/dev/null; j .meta.total)"
+check "  scope=past" "1|\"$T4\"" "$(as $REC "$TO?userId=$U1&scope=past" >/dev/null; j .meta.total)|$(j '.items[0].id')"
+check "  from/to touching the range" 2 "$(as $REC "$TO?userId=$U1&from=$(day 14)&to=$(day 20)" >/dev/null; j .meta.total)"
+check "doctor own list (no userId) → only own" "200|4" "$(as $SELF $TO)|$(j "[.items[] | select(.userId == \"$U1\")] | length")"
+check "doctor another's list → 403" 403 "$(as $DOC "$TO?userId=$U1")"
+check "accountant → 403" 403 "$(as $ACC $TO)"
+check "bad scope → 400" 400 "$(as $REC "$TO?scope=soon")"
+check "doctor DELETE → 403" 403 "$(as $SELF -X DELETE $TO/$T2)"
+check "remove future → 204" 204 "$(as_admin -X DELETE $TO/$T2)"
+check "  gone" 0 "$(sq "select count(*) from time_off where id='$T2'")"
+check "  history" timeOff.deleted "$(wait_history timeOff.deleted $U1)"
+check "remove ended → 409" '409|"INVALID_STATUS"' "$(as_admin -X DELETE $TO/$T4)|$(j .error.code)"
+check "remove unknown → 404" 404 "$(as_admin -X DELETE $TO/$(cat /proc/sys/kernel/random/uuid))"
+check "re-add the removed day → 201" 201 "$(addoff "$(off $U1 DAY_OFF 15 15)")"
+
 echo "Sync from auth"
 check "rename in auth → 200" 200 "$(as_admin -X PATCH $USERS/$U1 -H 'content-type: application/json' -d '{"firstName":"Zaurbek"}')"
 check "  name copied" ok "$(wait_staff $U1 "first_name = 'Zaurbek'")"
@@ -288,6 +334,8 @@ check "deactivate in auth → 200" 200 "$(as_admin -X PATCH $USERS/$U1/deactivat
 check "  DEACTIVATED, not active" ok "$(wait_staff $U1 "status = 'DEACTIVATED' and not is_active")"
 check "  schedule locked → 409" '409|"INVALID_STATUS"' "$(put $U1 "$WEEK")|$(j .error.code)"
 check "  schedule still readable" '200|[1,3]' "$(as_admin $SCH/$U1)|$(j '[.days[].dayOfWeek]')"
+check "  time off locked → 409" 409 "$(addoff "$(off $U1 VACATION 50 52)")"
+check "  time off removal locked → 409" 409 "$(as_admin -X DELETE $TO/$T1)"
 check "  gone from /staff/doctors" false "$(as $ACC "$STAFF/doctors" >/dev/null; j "[.[].userId] | index(\"$U1\") != null")"
 check "  profile still readable" '200|false' "$(as $DOC $STAFF/$U1)|$(j .isActive)"
 check "reactivate in auth → 200" 200 "$(as_admin -X PATCH $USERS/$U1/reactivate)"
