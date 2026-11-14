@@ -1,13 +1,15 @@
 import { EventEnvelope } from './envelope';
 import { AuthEventPayloads } from './events/auth.events';
 import { ConfigurationsEventPayloads } from './events/configurations.events';
+import { PatientEventPayloads } from './events/patient.events';
 import { StaffEventPayloads } from './events/staff.events';
 
 // Every event of the system → its payload type. Each phase adds the events
 // of its service here (PatientEventPayloads & …).
 export type EventPayloadMap = AuthEventPayloads &
   ConfigurationsEventPayloads &
-  StaffEventPayloads;
+  StaffEventPayloads &
+  PatientEventPayloads;
 
 export type EventType = keyof EventPayloadMap;
 
