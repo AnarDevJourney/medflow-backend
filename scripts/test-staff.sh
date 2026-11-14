@@ -9,6 +9,8 @@
 # doctor-only, deactivated → 409, schedule.updated history.
 # Time off: add / list / remove, overlap → 409 (exclusion constraint),
 # date rules, ended periods kept, time_off.* history.
+# Internal API: doctor's day (working / every reason), recipients list,
+# internal key required, not routed by the gateway.
 # Needs the Docker stack: ./scripts/run-all.sh, then ./scripts/test-staff.sh
 # Deletes the departments and users it creates (their history rows stay: append-only).
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -327,6 +329,56 @@ check "remove ended → 409" '409|"INVALID_STATUS"' "$(as_admin -X DELETE $TO/$T
 check "remove unknown → 404" 404 "$(as_admin -X DELETE $TO/$(cat /proc/sys/kernel/random/uuid))"
 check "re-add the removed day → 201" 201 "$(addoff "$(off $U1 DAY_OFF 15 15)")"
 
+echo "Internal API"
+# Service ports are not published: call from inside the staff container.
+# svc <nokey|key> <url> → prints the status, body goes to $D/body
+SVC=http://localhost:3002
+svc() {
+  local out
+  out=$($DC exec -T staff-service node -e '
+    const [mode, url] = process.argv.slice(1);
+    const headers = mode === "key" ? { "x-internal-key": process.env.INTERNAL_API_KEY } : {};
+    fetch(url, { headers }).then(async (r) => process.stdout.write(r.status + "\n" + (await r.text())));
+  ' "$1" "$2")
+  echo "$out" | tail -n +2 > $D/body
+  echo "$out" | head -1
+}
+ik() { svc key "$1"; }
+dd() { ik "$SVC/internal/doctors/$1/day${2:+?date=$2}"; } # dd <userId> [date]
+# First offset ≥ $1 whose ISO weekday is $2
+wd() { local o=$1; while [ "$(date -d "$o days" +%u)" != "$2" ]; do o=$((o+1)); done; echo $o; }
+spatch $U1 "{\"departmentId\":\"$CARD\"}" >/dev/null
+MON=$(day "$(wd 20 1)"); WED=$(day "$(wd 20 3)"); TUE=$(day "$(wd 20 2)")
+check "no key → 401" 401 "$(svc nokey "$SVC/internal/doctors/$U1/day?date=$MON")"
+check "not routed by the gateway → 404" 404 "$(as_admin "$API/internal/doctors/$U1/day")"
+check "Monday → working 09:00–17:00 / 30" "200|true|\"$MON\"|\"09:00\"|\"17:00\"|30" "$(dd $U1 $MON)|$(j .working)|$(j .date)|$(j .start)|$(j .end)|$(j .slotMinutes)"
+check "  doctor + department" "\"Zaur Testov\"|\"$CARD\"|\"Cardiology\"|\"CARD\"" "$(j .doctorName)|$(j .departmentId)|$(j .departmentName)|$(j .departmentCode)"
+check "  fields" '["date","departmentCode","departmentId","departmentName","doctorName","end","slotMinutes","start","working"]' "$(j 'keys')"
+check "Wednesday → 10:00–14:00 / 20" '"10:00"|"14:00"|20' "$(dd $U1 $WED >/dev/null; j .start)|$(j .end)|$(j .slotMinutes)"
+check "Tuesday → NOT_SCHEDULED" '200|false|"NOT_SCHEDULED"' "$(dd $U1 $TUE)|$(j .working)|$(j .reason)"
+check "  fields" '["date","reason","working"]' "$(j 'keys')"
+check "vacation first day → VACATION" '"VACATION"' "$(dd $U1 "$(day 10)" >/dev/null; j .reason)"
+check "vacation last day → VACATION" '"VACATION"' "$(dd $U1 "$(day 14)" >/dev/null; j .reason)"
+check "day off → DAY_OFF" '"DAY_OFF"' "$(dd $U1 "$(day 15)" >/dev/null; j .reason)"
+check "past sick leave → SICK_LEAVE" '"SICK_LEAVE"' "$(dd $U1 "$(day -4)" >/dev/null; j .reason)"
+check "training → TRAINING" '"TRAINING"' "$(dd $U1 "$(day 1100)" >/dev/null; j .reason)"
+check "no date → clinic today" "200|\"$(TZ=Asia/Baku date +%F)\"" "$(dd $U1)|$(j .date)"
+check "nurse → NOT_A_DOCTOR" '200|false|"NOT_A_DOCTOR"' "$(dd $U2 $MON)|$(j .working)|$(j .reason)"
+check "unknown user → 404" 404 "$(dd "$(cat /proc/sys/kernel/random/uuid)" $MON)"
+check "bad uuid → 400" 400 "$(dd nope $MON)"
+check "bad date → 400" 400 "$(dd $U1 2026-02-30)"
+check "date with time → 400" 400 "$(dd $U1 "${MON}T10:00:00Z")"
+ST=$SVC/internal/staff
+check "staff list → 200, both invites" true "$(ik $ST >/dev/null; j "([.[].userId] | index(\"$U1\") != null) and ([.[].userId] | index(\"$U2\") != null)")"
+check "  fields" '["departmentId","firstName","lastName","role","userId"]' "$(j '.[0]|keys')"
+check "  sorted by name" true "$(j '[.[] | .lastName + " " + .firstName] == ([.[] | .lastName + " " + .firstName] | sort)')"
+check "role=NURSE → nurses only, has U2" true "$(ik "$ST?role=NURSE" >/dev/null; j "all(.[]; .role == \"NURSE\") and ([.[].userId] | index(\"$U2\") != null)")"
+check "role=DOCTOR + CARD → U1" true "$(ik "$ST?role=DOCTOR&departmentId=$CARD" >/dev/null; j "all(.[]; .role == \"DOCTOR\" and .departmentId == \"$CARD\") and ([.[].userId] | index(\"$U1\") != null)")"
+check "role=NURSE + CARD → no U2 (no department)" false "$(ik "$ST?role=NURSE&departmentId=$CARD" >/dev/null; j "[.[].userId] | index(\"$U2\") != null")"
+check "bad role → 400" 400 "$(ik "$ST?role=PILOT")"
+check "bad departmentId → 400" 400 "$(ik "$ST?departmentId=nope")"
+check "no key → 401" 401 "$(svc nokey $ST)"
+
 echo "Sync from auth"
 check "rename in auth → 200" 200 "$(as_admin -X PATCH $USERS/$U1 -H 'content-type: application/json' -d '{"firstName":"Zaurbek"}')"
 check "  name copied" ok "$(wait_staff $U1 "first_name = 'Zaurbek'")"
@@ -338,6 +390,8 @@ check "  time off locked → 409" 409 "$(addoff "$(off $U1 VACATION 50 52)")"
 check "  time off removal locked → 409" 409 "$(as_admin -X DELETE $TO/$T1)"
 check "  gone from /staff/doctors" false "$(as $ACC "$STAFF/doctors" >/dev/null; j "[.[].userId] | index(\"$U1\") != null")"
 check "  profile still readable" '200|false' "$(as $DOC $STAFF/$U1)|$(j .isActive)"
+check "  internal day → DEACTIVATED" '200|false|"DEACTIVATED"' "$(dd $U1 $MON)|$(j .working)|$(j .reason)"
+check "  not in /internal/staff" false "$(ik $ST >/dev/null; j "[.[].userId] | index(\"$U1\") != null")"
 check "reactivate in auth → 200" 200 "$(as_admin -X PATCH $USERS/$U1/reactivate)"
 check "  INVITED again, active" ok "$(wait_staff $U1 "status = 'INVITED' and is_active")"
 

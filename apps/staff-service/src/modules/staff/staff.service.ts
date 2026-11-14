@@ -22,6 +22,7 @@ import { StaffEvents } from '@medflow/contracts';
 import { OutboxService } from '@medflow/kafka';
 import { Department } from '../departments/entities/department.entity';
 import {
+  InternalStaffQueryDto,
   ListDoctorsQueryDto,
   ListStaffQueryDto,
   STAFF_SORT_FIELDS,
@@ -31,6 +32,14 @@ import { StaffMember, StaffStatus } from './entities/staff-member.entity';
 import { StaffResponse, toStaffResponse } from './staff.mapper';
 
 const AGGREGATE = 'STAFF_MEMBER';
+
+export interface InternalStaffItem {
+  userId: string;
+  firstName: string;
+  lastName: string;
+  role: Role;
+  departmentId: string | null;
+}
 
 const EDITABLE_FIELDS = [
   'departmentId',
@@ -146,6 +155,42 @@ export class StaffService {
       .addOrderBy('staff.firstName', 'ASC')
       .getMany();
     return rows.map(toStaffResponse);
+  }
+
+  // Recipients for notification-service: everyone not deactivated (invited
+  // accounts included — they get the message once they log in), no paging
+  async listForInternal(
+    query: InternalStaffQueryDto,
+  ): Promise<InternalStaffItem[]> {
+    const qb = this.staff
+      .createQueryBuilder('staff')
+      .select([
+        'staff.userId',
+        'staff.firstName',
+        'staff.lastName',
+        'staff.role',
+        'staff.departmentId',
+      ])
+      .where('staff.status != :deactivated', {
+        deactivated: StaffStatus.DEACTIVATED,
+      });
+    if (query.role) qb.andWhere('staff.role = :role', { role: query.role });
+    if (query.departmentId) {
+      qb.andWhere('staff.departmentId = :departmentId', {
+        departmentId: query.departmentId,
+      });
+    }
+    const rows = await qb
+      .orderBy('staff.lastName', 'ASC')
+      .addOrderBy('staff.firstName', 'ASC')
+      .getMany();
+    return rows.map((row) => ({
+      userId: row.userId,
+      firstName: row.firstName,
+      lastName: row.lastName,
+      role: row.role,
+      departmentId: row.departmentId,
+    }));
   }
 
   async findOne(userId: string): Promise<StaffResponse> {

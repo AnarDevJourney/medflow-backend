@@ -57,3 +57,16 @@ export class ListDoctorsQueryDto {
   @IsUUID()
   departmentId?: string;
 }
+
+// GET /internal/staff?role=NURSE&departmentId=… — notification recipients
+export class InternalStaffQueryDto {
+  @ApiPropertyOptional({ enum: Role })
+  @IsOptional()
+  @IsEnum(Role)
+  role?: Role;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  departmentId?: string;
+}
