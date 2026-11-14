@@ -8,6 +8,8 @@
 # Clinical summary (6.3): allergies + chronic conditions, clinical-only
 # access, hidden from GET /patients/:id for others, duplicates, inactive
 # records, events / history without clinical values.
+# Internal API + stats (6.4): summary / allergies (internal key, not via the
+# gateway), GET /patients/stats totals, months, gender, age-group bounds.
 # Needs the Docker stack: ./scripts/run-all.sh, then ./scripts/test-patients.sh
 # Deletes the patients it creates (their history rows stay: append-only).
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -253,6 +255,62 @@ check "inactive patient: add allergy → 409" '409|"INVALID_STATUS"' "$(as $DOC 
 check "inactive patient: add condition → 409" 409 "$(as $DOC -X POST $P/$P2/conditions -H 'content-type: application/json' -d '{"name":"X"}')"
 check "inactive patient: still readable" 200 "$(as $DOC $P/$P2/allergies)"
 as_admin -X PATCH $P/$P2/reactivate >/dev/null
+
+echo "Internal API"
+redis_flush_rl # the gateway allows 100 requests a minute per IP
+# Service ports are not published: call from inside the patient container.
+# svc <nokey|key> <url> → prints the status, body goes to $D/body
+SVC=http://localhost:3003
+svc() {
+  local out
+  out=$($DC exec -T patient-service node -e '
+    const [mode, url] = process.argv.slice(1);
+    const headers = mode === "key" ? { "x-internal-key": process.env.INTERNAL_API_KEY } : {};
+    fetch(url, { headers }).then(async (r) => process.stdout.write(r.status + "\n" + (await r.text())));
+  ' "$1" "$2")
+  echo "$out" | tail -n +2 > $D/body
+  echo "$out" | head -1
+}
+check "summary without the key → 401" 401 "$(svc nokey "$SVC/internal/patients/$P1/summary")"
+check "not routed by the gateway → 404" 404 "$(as_admin "$API/internal/patients/$P1/summary")"
+check "summary → 200" "200|\"$MRN1\"|\"Leyla\"|\"+994 51 222 33 44\"|true" "$(svc key "$SVC/internal/patients/$P1/summary")|$(j .mrn)|$(j .firstName)|$(j .phone)|$(j .isActive)"
+check "  fields" '["email","firstName","id","isActive","lastName","mrn","phone"]' "$(j 'keys')"
+as_admin -X PATCH $P/$P2/deactivate >/dev/null
+check "inactive patient → 200, isActive false" '200|false' "$(svc key "$SVC/internal/patients/$P2/summary")|$(j .isActive)"
+as_admin -X PATCH $P/$P2/reactivate >/dev/null
+check "unknown patient → 404" 404 "$(svc key "$SVC/internal/patients/$(cat /proc/sys/kernel/random/uuid)/summary")"
+check "bad uuid → 400" 400 "$(svc key "$SVC/internal/patients/nope/summary")"
+check "allergies → most severe first" '200|["Penicillin","Peanuts"]|["SEVERE","MILD"]' "$(svc key "$SVC/internal/patients/$P1/allergies")|$(j '[.[].allergen]')|$(j '[.[].severity]')"
+check "  fields" '["allergen","category","reaction","severity"]' "$(j '.[0]|keys')"
+check "  none → []" '200|[]' "$(svc key "$SVC/internal/patients/$P3/allergies")|$(j .)"
+check "  unknown patient → 404" 404 "$(svc key "$SVC/internal/patients/$(cat /proc/sys/kernel/random/uuid)/allergies")"
+check "  without the key → 401" 401 "$(svc nokey "$SVC/internal/patients/$P1/allergies")"
+
+echo "Stats"
+redis_flush_rl # the gateway allows 100 requests a minute per IP
+ST=$P/stats
+check "receptionist → 403" 403 "$(as $REC $ST)"
+check "doctor → 403" 403 "$(as $DOC $ST)"
+check "admin → 200" 200 "$(as_admin $ST)"
+check "  shape" '["ageGroups","gender","monthly","totals"]|["active","inactive","newLastMonth","newThisMonth"]|12|["0-17","18-39","40-64","65+"]' "$(j 'keys')|$(j '.totals|keys')|$(j '.monthly|length')|$(j '[.ageGroups[].group]')"
+check "  months oldest first, the last is this month" "true|\"$(TZ=Asia/Baku date +%Y-%m)\"" "$(j '[.monthly[].month] == ([.monthly[].month]|sort)')|$(j '.monthly[-1].month')"
+cp $D/body $D/s1
+# Born exactly 18 years ago today (18 → 18-39), one day later (17 → 0-17), and a 76-year-old
+EIGHTEEN=$(TZ=Asia/Baku date -d '-18 years' +%F)
+SEVENTEEN=$(TZ=Asia/Baku date -d "$EIGHTEEN +1 day" +%F)
+reg $REC "{\"firstName\":\"Adult\",\"lastName\":\"$SUR\",\"dateOfBirth\":\"$EIGHTEEN\",\"gender\":\"MALE\",\"phone\":\"+994 50 000 00 04\"}" >/dev/null
+reg $REC "{\"firstName\":\"Teen\",\"lastName\":\"$SUR\",\"dateOfBirth\":\"$SEVENTEEN\",\"gender\":\"FEMALE\",\"phone\":\"+994 50 000 00 05\"}" >/dev/null
+check "register a 76-year-old → 201" 201 "$(reg $REC "{\"firstName\":\"Elder\",\"lastName\":\"$SUR\",\"dateOfBirth\":\"1950-01-15\",\"gender\":\"FEMALE\",\"phone\":\"+994 50 000 00 06\"}")"
+OLD=$(j .id | tr -d '"')
+as_admin $ST >/dev/null; cp $D/body $D/s2
+delta() { jq -n --slurpfile a $D/s1 --slurpfile b $D/s2 "(\$b[0].data | $1) - (\$a[0].data | $1)"; }
+check "  +3 active, +3 this month, +3 in the last month bar" "3|3|3" "$(delta .totals.active)|$(delta .totals.newThisMonth)|$(delta '.monthly[-1].count')"
+check "  gender +1 male, +2 female" "1|2" "$(delta .gender.MALE)|$(delta .gender.FEMALE)"
+check "  age groups: 17 → 0-17, 18 → 18-39, 76 → 65+" "1|1|0|1" "$(delta '.ageGroups[0].count')|$(delta '.ageGroups[1].count')|$(delta '.ageGroups[2].count')|$(delta '.ageGroups[3].count')"
+as_admin -X PATCH $P/$OLD/deactivate >/dev/null
+as_admin $ST >/dev/null; cp $D/body $D/s2
+check "  deactivated: +2 active, +1 inactive, not in the age groups" "2|1|0" "$(delta .totals.active)|$(delta .totals.inactive)|$(delta '.ageGroups[3].count')"
+check "  still counted as registered this month" 3 "$(delta .totals.newThisMonth)"
 
 echo "Timeline"
 redis_flush_rl # the gateway allows 100 requests a minute per IP

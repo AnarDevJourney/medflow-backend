@@ -14,6 +14,7 @@ import type { CurrentUserData } from '@medflow/common';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { ListPatientsQueryDto } from './dto/list-patients-query.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
+import { PatientStatsService } from './patient-stats.service';
 import { PatientsService } from './patients.service';
 
 // DOC 8.4. PATCH /patients/:id/reactivate is our addition: a record
@@ -21,7 +22,10 @@ import { PatientsService } from './patients.service';
 @ApiTags('patients')
 @Controller('patients')
 export class PatientsController {
-  constructor(private readonly patients: PatientsService) {}
+  constructor(
+    private readonly patients: PatientsService,
+    private readonly statsService: PatientStatsService,
+  ) {}
 
   @Get()
   @RequirePermission('patients.read')
@@ -33,6 +37,13 @@ export class PatientsController {
   @RequirePermission('patients.create')
   create(@Body() dto: CreatePatientDto, @CurrentUser() actor: CurrentUserData) {
     return this.patients.create(dto, actor);
+  }
+
+  // Before :id, so 'stats' is not taken for a patient id
+  @Get('stats')
+  @RequirePermission('patients.stats')
+  stats() {
+    return this.statsService.stats();
   }
 
   // Allergies and conditions are included only for clinical readers
