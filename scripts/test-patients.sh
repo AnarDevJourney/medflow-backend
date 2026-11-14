@@ -5,6 +5,9 @@
 # best match first), filters / sort / pages, edit (changed fields, no-op),
 # deactivate / reactivate, permissions, outbox → Kafka → action history
 # (patient timeline).
+# Clinical summary (6.3): allergies + chronic conditions, clinical-only
+# access, hidden from GET /patients/:id for others, duplicates, inactive
+# records, events / history without clinical values.
 # Needs the Docker stack: ./scripts/run-all.sh, then ./scripts/test-patients.sh
 # Deletes the patients it creates (their history rows stay: append-only).
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -100,6 +103,7 @@ check "unknown → 404" 404 "$(as $REC $P/$(cat /proc/sys/kernel/random/uuid))"
 check "bad uuid → 400" 400 "$(as $REC $P/nope)"
 
 echo "Search"
+redis_flush_rl # the gateway allows 100 requests a minute per IP
 ids() { j "[.items[].id]"; }
 has() { j "[.items[].id] | index(\"$1\") != null"; }
 check "doctor list → 200, newest first" "200|true" "$(as $DOC "$P?limit=100")|$(j '[.items[].createdAt] == ([.items[].createdAt]|sort|reverse)')"
@@ -131,6 +135,7 @@ check "bad gender → 400" 400 "$(as $REC "$P?gender=X")"
 check "limit 101 → 400" 400 "$(as $REC "$P?limit=101")"
 
 echo "Edit"
+redis_flush_rl # the gateway allows 100 requests a minute per IP
 check "doctor PATCH → 403" 403 "$(upd $DOC $P1 '{"phone":"+994 50 000 00 09"}')"
 check "accountant PATCH → 403" 403 "$(upd $ACC $P1 '{"phone":"+994 50 000 00 09"}')"
 check "receptionist PATCH → 200" '200|"+994 51 222 33 44"|"O_NEG"|null' "$(upd $REC $P1 '{"phone":"+994 51 222 33 44","bloodType":"O_NEG","address":"  "}')|$(j .phone)|$(j .bloodType)|$(j .address)"
@@ -164,7 +169,93 @@ check "  history" patient.reactivated "$(wait_history patient.reactivated $P3)"
 check "  again → 409" 409 "$(as_admin -X PATCH $P/$P3/reactivate)"
 check "unknown → 404" 404 "$(as_admin -X PATCH $P/$(cat /proc/sys/kernel/random/uuid)/deactivate)"
 
+echo "Allergies"
+redis_flush_rl # the gateway allows 100 requests a minute per IP
+A=$P/$P1/allergies
+addA() { as $1 -X POST $A -H 'content-type: application/json' -d "$2"; }
+check "receptionist list → 403" 403 "$(as $REC $A)"
+check "admin list → 403 (no clinical data)" 403 "$(as_admin $A)"
+check "receptionist add → 403" 403 "$(addA $REC '{"allergen":"Penicillin","category":"DRUG","severity":"SEVERE"}')"
+check "empty list" '200|[]' "$(as $DOC $A)|$(j .)"
+check "nurse adds penicillin → 201" '201|"Penicillin"|"SEVERE"|"Anaphylaxis"' "$(addA $NUR '{"allergen":" Penicillin ","category":"DRUG","severity":"SEVERE","reaction":"Anaphylaxis"}')|$(j .allergen)|$(j .severity)|$(j .reaction)"
+AL1=$(j .id | tr -d '"')
+check "  fields" '["allergen","category","createdAt","id","reaction","recordedByName","severity"]' "$(j 'keys')"
+check "  recorded by (name snapshot)" '"Expiry Test"' "$(j .recordedByName)"
+check "  event without the allergen" "patient.allergy_added|PATIENT|$AL1|null|null" "$(pq "select event_type||'|'||aggregate_type||'|'||(payload->'payload'->>'allergyId')||'|'||coalesce(payload->'payload'->>'allergen','null')||'|'||coalesce(payload->'payload'->>'severity','null') from outbox_events where aggregate_id='$P1' and event_type='patient.allergy_added' order by occurred_at desc limit 1")"
+check "  history" patient.allergyAdded "$(wait_history patient.allergyAdded $P1)"
+check "  history has no clinical value" 0 "$(hq "select count(*) from action_history where entity_id='$P1' and (summary ilike '%penicillin%' or summary_params::text ilike '%penicillin%' or metadata::text ilike '%penicillin%')")"
+check "same allergen, other case → 409 on the field" '409|"allergen"' "$(addA $DOC '{"allergen":"PENICILLIN","category":"DRUG","severity":"MILD"}')|$(j .error.details.field)"
+check "doctor adds peanuts (mild) → 201" 201 "$(addA $DOC '{"allergen":"Peanuts","category":"FOOD","severity":"MILD"}')"
+check "doctor adds latex (moderate) → 201" 201 "$(addA $DOC '{"allergen":"Latex","category":"ENVIRONMENTAL","severity":"MODERATE"}')"
+AL3=$(j .id | tr -d '"')
+check "list: most severe first" '["Penicillin","Latex","Peanuts"]' "$(as $NUR $A >/dev/null; j '[.[].allergen]')"
+check "bad category → 400" 400 "$(addA $DOC '{"allergen":"X","category":"DUST","severity":"MILD"}')"
+check "bad severity → 400" 400 "$(addA $DOC '{"allergen":"X","category":"OTHER","severity":"FATAL"}')"
+check "empty allergen → 400" 400 "$(addA $DOC '{"allergen":"  ","category":"OTHER","severity":"MILD"}')"
+check "unknown patient → 404" 404 "$(as $DOC -X POST $P/$(cat /proc/sys/kernel/random/uuid)/allergies -H 'content-type: application/json' -d '{"allergen":"X","category":"OTHER","severity":"MILD"}')"
+updA() { as $1 -X PATCH $A/$2 -H 'content-type: application/json' -d "$3"; }
+check "receptionist edit → 403" 403 "$(updA $REC $AL3 '{"severity":"SEVERE"}')"
+check "edit every field → 200" '200|"Natural rubber latex"|"OTHER"|"SEVERE"|"Hives"' "$(updA $NUR $AL3 '{"allergen":" Natural rubber latex ","category":"OTHER","severity":"SEVERE","reaction":"Hives"}')|$(j .allergen)|$(j .category)|$(j .severity)|$(j .reaction)"
+check "  event: field names only" '["allergen","category","severity","reaction"]|null' "$(pq "select (payload->'payload'->'changedFields')::text||'|'||coalesce(payload->'payload'->>'allergen','null') from outbox_events where aggregate_id='$P1' and event_type='patient.allergy_updated' order by occurred_at desc limit 1" | sed 's/, /,/g')"
+check "  history" patient.allergyUpdated "$(wait_history patient.allergyUpdated $P1)"
+check "  history has no allergen" 0 "$(hq "select count(*) from action_history where entity_id='$P1' and (summary ilike '%rubber%' or summary_params::text ilike '%rubber%' or metadata::text ilike '%hives%')")"
+check "clear the reaction → 200" '200|null' "$(updA $NUR $AL3 '{"reaction":""}')|$(j .reaction)"
+BEFORE=$(pq "select count(*) from outbox_events")
+check "same values → 200, no event" "200|0" "$(updA $NUR $AL3 '{"severity":"SEVERE"}')|$(( $(pq "select count(*) from outbox_events") - BEFORE ))"
+check "rename to an existing allergen → 409" '409|"allergen"' "$(updA $NUR $AL3 '{"allergen":"peanuts"}')|$(j .error.details.field)"
+check "clear the allergen → 400" 400 "$(updA $NUR $AL3 '{"allergen":null}')"
+check "bad severity → 400" 400 "$(updA $NUR $AL3 '{"severity":"FATAL"}')"
+check "unknown allergy → 404" 404 "$(updA $NUR $(cat /proc/sys/kernel/random/uuid) '{"severity":"MILD"}')"
+check "remove → 204" 204 "$(as $NUR -X DELETE $A/$AL3)"
+check "  history" patient.allergyRemoved "$(wait_history patient.allergyRemoved $P1)"
+check "remove again → 404" 404 "$(as $NUR -X DELETE $A/$AL3)"
+check "another patient's allergy id → 404" 404 "$(as $NUR -X DELETE $P/$P2/allergies/$AL1)"
+check "receptionist remove → 403" 403 "$(as $REC -X DELETE $A/$AL1)"
+
+echo "Conditions"
+redis_flush_rl # the gateway allows 100 requests a minute per IP
+C=$P/$P1/conditions
+addC() { as $1 -X POST $C -H 'content-type: application/json' -d "$2"; }
+check "receptionist list → 403" 403 "$(as $REC $C)"
+check "doctor adds diabetes → 201" '201|"E11"|"ACTIVE"|"2019-03-01"' "$(addC $DOC '{"name":"Type 2 diabetes mellitus","icd10Code":" e11 ","diagnosedOn":"2019-03-01","notes":"On metformin"}')|$(j .icd10Code)|$(j .status)|$(j .diagnosedOn)"
+CO1=$(j .id | tr -d '"')
+check "  fields" '["createdAt","diagnosedOn","icd10Code","id","name","notes","recordedByName","status","updatedAt"]' "$(j 'keys')"
+check "  event without the diagnosis" "patient.condition_added|$CO1|null" "$(pq "select event_type||'|'||(payload->'payload'->>'conditionId')||'|'||coalesce(payload->'payload'->>'name','null') from outbox_events where aggregate_id='$P1' and event_type='patient.condition_added' order by occurred_at desc limit 1")"
+check "  history" patient.conditionAdded "$(wait_history patient.conditionAdded $P1)"
+check "nurse adds asthma (resolved, no code) → 201" 201 "$(addC $NUR '{"name":"Childhood asthma","status":"RESOLVED"}')"
+check "nurse adds hypertension → 201" 201 "$(addC $NUR '{"name":"Essential hypertension","icd10Code":"I10","diagnosedOn":"2021-06-10"}')"
+CO3=$(j .id | tr -d '"')
+check "list: active first, latest diagnosis first" '["Essential hypertension","Type 2 diabetes mellitus","Childhood asthma"]' "$(as $DOC $C >/dev/null; j '[.[].name]')"
+check "bad ICD-10 → 400" 400 "$(addC $DOC '{"name":"X","icd10Code":"diabetes"}')"
+check "ICD-10 with a subcode → 201" '201|"J45.909"' "$(addC $DOC '{"name":"Asthma, unspecified","icd10Code":"J45.909"}')|$(j .icd10Code)"
+CO4=$(j .id | tr -d '"')
+check "future diagnosis date → 422" '422|"diagnosedOn"' "$(addC $DOC "{\"name\":\"X\",\"diagnosedOn\":\"$(date -d '+2 days' +%F)\"}")|$(j .error.details.field)"
+check "resolve hypertension → 200" '200|"RESOLVED"' "$(as $NUR -X PATCH $C/$CO3 -H 'content-type: application/json' -d '{"status":"RESOLVED","notes":"Controlled with diet"}')|$(j .status)"
+check "  event: field names only" '["status","notes"]|null' "$(pq "select (payload->'payload'->'changedFields')::text||'|'||coalesce(payload->'payload'->>'notes','null') from outbox_events where aggregate_id='$P1' and event_type='patient.condition_updated' order by occurred_at desc limit 1" | sed 's/, /,/g')"
+check "  history" patient.conditionUpdated "$(wait_history patient.conditionUpdated $P1)"
+BEFORE=$(pq "select count(*) from outbox_events")
+check "same values → 200, no event" "200|0" "$(as $NUR -X PATCH $C/$CO3 -H 'content-type: application/json' -d '{"status":"RESOLVED"}')|$(( $(pq "select count(*) from outbox_events") - BEFORE ))"
+check "clear the name → 400" 400 "$(as $NUR -X PATCH $C/$CO3 -H 'content-type: application/json' -d '{"name":null}')"
+check "remove a mistaken condition → 204" 204 "$(as $DOC -X DELETE $C/$CO4)"
+check "  history" patient.conditionRemoved "$(wait_history patient.conditionRemoved $P1)"
+check "unknown condition → 404" 404 "$(as $DOC -X PATCH $C/$(cat /proc/sys/kernel/random/uuid) -H 'content-type: application/json' -d '{"notes":"x"}')"
+check "history never names a diagnosis" 0 "$(hq "select count(*) from action_history where entity_id='$P1' and (summary ilike '%diabetes%' or summary ilike '%hypertension%' or summary_params::text ilike '%diet%' or metadata::text ilike '%metformin%')")"
+
+echo "Clinical in the patient record"
+redis_flush_rl # the gateway allows 100 requests a minute per IP
+check "doctor GET /patients/:id → 2 allergies + 3 conditions" '200|2|3' "$(as $DOC $P/$P1)|$(j '.allergies|length')|$(j '.conditions|length')"
+check "  most severe allergy first" '"Penicillin"' "$(j '.allergies[0].allergen')"
+check "receptionist GET → no clinical fields" 'false|false' "$(as $REC $P/$P1 >/dev/null; j 'has("allergies")')|$(j 'has("conditions")')"
+check "admin GET → no clinical fields" false "$(as_admin $P/$P1 >/dev/null; j 'has("allergies")')"
+check "list never carries clinical fields" false "$(as $DOC "$P?search=$MRN1" >/dev/null; j '.items[0] | has("allergies")')"
+as_admin -X PATCH $P/$P2/deactivate >/dev/null
+check "inactive patient: add allergy → 409" '409|"INVALID_STATUS"' "$(as $DOC -X POST $P/$P2/allergies -H 'content-type: application/json' -d '{"allergen":"X","category":"OTHER","severity":"MILD"}')|$(j .error.code)"
+check "inactive patient: add condition → 409" 409 "$(as $DOC -X POST $P/$P2/conditions -H 'content-type: application/json' -d '{"name":"X"}')"
+check "inactive patient: still readable" 200 "$(as $DOC $P/$P2/allergies)"
+as_admin -X PATCH $P/$P2/reactivate >/dev/null
+
 echo "Timeline"
+redis_flush_rl # the gateway allows 100 requests a minute per IP
 check "admin /history/patients/:id → registered, deactivated, reactivated" "200|3" "$(as_admin "$API/history/patients/$P3")|$(j '.meta.total // (.items|length)')"
 check "receptionist → 403" 403 "$(as $REC "$API/history/patients/$P3")"
 

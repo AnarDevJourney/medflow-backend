@@ -18,6 +18,8 @@ import {
   ListPatientsQueryDto,
   PATIENT_SORT_FIELDS,
 } from './dto/list-patients-query.dto';
+import { ClinicalService } from './clinical.service';
+import { AllergyResponse, ConditionResponse } from './clinical.mapper';
 import { UpdatePatientDto } from './dto/update-patient.dto';
 import { Patient } from './entities/patient.entity';
 import {
@@ -31,6 +33,11 @@ import {
 } from './patient.mapper';
 
 const AGGREGATE = 'PATIENT';
+
+export interface PatientWithClinical extends PatientResponse {
+  allergies: AllergyResponse[];
+  conditions: ConditionResponse[];
+}
 // Indexed (pg_trgm GIN); Azerbaijani letters folded, see the migration
 const SEARCH_NAME =
   'patient_search_name(patient.first_name, patient.last_name)';
@@ -91,6 +98,7 @@ export class PatientsService {
     @InjectRepository(Patient)
     private readonly patients: Repository<Patient>,
     private readonly outbox: OutboxService,
+    private readonly clinical: ClinicalService,
   ) {}
 
   // Search-first list (DOC 6.1): fuzzy name, exact MRN / FIN / phone
@@ -177,10 +185,15 @@ export class PatientsService {
     return paginated(items.map(toPatientResponse), total, query);
   }
 
-  async findOne(id: string): Promise<PatientResponse> {
+  async findOne(
+    id: string,
+    viewer: CurrentUserData,
+  ): Promise<PatientResponse | PatientWithClinical> {
     const row = await this.patients.findOneBy({ id });
     if (!row) throw notFound();
-    return toPatientResponse(row);
+    const patient = toPatientResponse(row);
+    if (!viewer.permissions.includes('patients.clinical_read')) return patient;
+    return { ...patient, ...(await this.clinical.summary(id)) };
   }
 
   // MRN from the sequence + the patient + patient.registered, one transaction

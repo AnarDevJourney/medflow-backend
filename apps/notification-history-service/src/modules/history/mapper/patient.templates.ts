@@ -35,6 +35,52 @@ export const patientTemplates: HistoryTemplates<PatientEventType> = {
 
   'patient.reactivated': (event) =>
     entry(event, 'reactivated the record of', 'patient.reactivated'),
+
+  // Clinical summary: which patient and that the list changed — never the
+  // allergen, diagnosis, severity or notes (ADMIN reads the history)
+  'patient.allergy_added': (event) =>
+    entry(event, 'added an allergy to the record of', 'patient.allergyAdded'),
+  'patient.allergy_updated': (event) => ({
+    ...entry(event, 'updated an allergy of', 'patient.allergyUpdated', {
+      fields: event.payload.changedFields,
+    }),
+    metadata: {
+      mrn: event.payload.mrn,
+      changedFields: event.payload.changedFields,
+    },
+  }),
+  'patient.allergy_removed': (event) =>
+    entry(
+      event,
+      'removed an allergy from the record of',
+      'patient.allergyRemoved',
+    ),
+  'patient.condition_added': (event) =>
+    entry(
+      event,
+      'added a chronic condition to the record of',
+      'patient.conditionAdded',
+    ),
+  'patient.condition_updated': (event) => ({
+    ...entry(
+      event,
+      'updated a chronic condition of',
+      'patient.conditionUpdated',
+      {
+        fields: event.payload.changedFields,
+      },
+    ),
+    metadata: {
+      mrn: event.payload.mrn,
+      changedFields: event.payload.changedFields,
+    },
+  }),
+  'patient.condition_removed': (event) =>
+    entry(
+      event,
+      'removed a chronic condition from the record of',
+      'patient.conditionRemoved',
+    ),
 };
 
 const nameOf = (p: { firstName: string; lastName: string }) =>

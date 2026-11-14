@@ -35,10 +35,14 @@ export class PatientsController {
     return this.patients.create(dto, actor);
   }
 
+  // Allergies and conditions are included only for clinical readers
   @Get(':id')
   @RequirePermission('patients.read')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.patients.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() viewer: CurrentUserData,
+  ) {
+    return this.patients.findOne(id, viewer);
   }
 
   @Patch(':id')
