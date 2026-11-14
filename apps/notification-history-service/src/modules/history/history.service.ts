@@ -12,6 +12,8 @@ import { HistoryResponse, toHistoryResponse } from './history.response';
 
 type HistoryQuery = SelectQueryBuilder<ActionHistory>;
 
+const PERSON_ENTITY_TYPES = ['USER', 'STAFF_MEMBER'];
+
 // Read side of the action history (DOC 8.9). Rows are written only by
 // ActionHistoryConsumer and never change.
 @Injectable()
@@ -67,6 +69,20 @@ export class HistoryService {
   ): Promise<Paginated<HistoryResponse>> {
     return this.page(query, (qb) =>
       qb.andWhere('h.actorId = :userId', { userId }),
+    );
+  }
+
+  // Everything that happened to one person: account events (USER) and
+  // work profile / schedule / time off events (STAFF_MEMBER) share the
+  // person's user id as entity id
+  aboutPerson(
+    userId: string,
+    query: HistoryRangeQueryDto,
+  ): Promise<Paginated<HistoryResponse>> {
+    return this.page(query, (qb) =>
+      qb
+        .andWhere('h.entityType IN (:...types)', { types: PERSON_ENTITY_TYPES })
+        .andWhere('h.entityId = :userId', { userId }),
     );
   }
 

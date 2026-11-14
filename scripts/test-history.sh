@@ -89,6 +89,9 @@ grep -q '"total":0' $D/body && check "  … total 0" ok ok || check "  … total
 check "entity history" 200 $(code -b $D/a.jar "$G/history/entity/USER/$U1")
 grep -q '"total":1' $D/body && check "  … one row for the new user" ok ok || check "  … one row for the new user" ok "$(cat $D/body)"
 check "user history (what the admin did)" 200 $(code -b $D/a.jar "$G/history/users/$ADMIN_ID?limit=1")
+check "about a person (account + staff events)" 200 $(code -b $D/a.jar "$G/history/users/$U1/about")
+grep -q '"eventType":"user.invited"' $D/body && check "  … has the invite" ok ok || check "  … has the invite" ok "$(cat $D/body)"
+check "about a person: bad uuid → 400" 400 $(code -b $D/a.jar "$G/history/users/nope/about")
 check "patient timeline (no patients yet)" 200 $(code -b $D/a.jar "$G/history/patients/$U1")
 check "bad entity type → 400" 400 $(code -b $D/a.jar "$G/history/entity/user-x/$U1")
 check "bad uuid → 400" 400 $(code -b $D/a.jar "$G/history/entity/USER/nope")
@@ -101,10 +104,14 @@ INV=$(mailtoken $EMAIL invited)
 check "nurse accepts the invite" 200 $(code -c $D/n.jar -X POST $G/auth/accept-invite -H 'content-type: application/json' -d "{\"token\":\"$INV\",\"password\":\"Secret123\"}")
 check "nurse: global feed → 403" 403 $(code -b $D/n.jar "$G/history")
 check "nurse: user history → 403" 403 $(code -b $D/n.jar "$G/history/users/$ADMIN_ID")
+check "nurse: about a person → 403" 403 $(code -b $D/n.jar "$G/history/users/$U1/about")
 check "nurse: entity history → 200" 200 $(code -b $D/n.jar "$G/history/entity/USER/$U1")
 check "nurse: patient timeline → 200" 200 $(code -b $D/n.jar "$G/history/patients/$U1")
 E3=$(event_id $U1 user.activated)
 check "user.activated recorded, actor = the nurse" "$U1" "$(waitfor 6 "$U1" q notification_db "select actor_id from action_history where event_id='$E3'")"
+check "about the nurse: invite + activation" 200 $(code -b $D/a.jar "$G/history/users/$U1/about?sort=occurredAt:asc")
+EVENTS=$(grep -o '"eventType":"[^"]*"' $D/body | cut -d'"' -f4 | tr '\n' ' ')
+[[ "$EVENTS" == "user.invited user.activated "* ]] && check "  … oldest first with sort" ok ok || check "  … oldest first with sort" ok "$EVENTS"
 
 echo "== Batching: a backlog of 900 events × ~5 KB"
 # The service is stopped while the events are published, so on start every

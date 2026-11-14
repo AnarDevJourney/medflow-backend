@@ -47,4 +47,15 @@ export class HistoryController {
   ) {
     return this.history.forActor(userId, query);
   }
+
+  // What happened to one person (account, profile, schedule, time off);
+  // the staff detail page's timeline
+  @Get('users/:userId/about')
+  @RequirePermission('history.user_read')
+  aboutUser(
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Query() query: HistoryRangeQueryDto,
+  ) {
+    return this.history.aboutPerson(userId, query);
+  }
 }
