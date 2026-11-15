@@ -145,8 +145,13 @@ services:
       <<: *common-env
       PORT: 3004
       DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/appointment_db
-      # TODO(phase 7): STAFF_SERVICE_URL / PATIENT_SERVICE_URL (internal calls);
-      #   depends_on redis (BullMQ jobs)
+      # Booking: doctor's day + patient summary (internal API)
+      STAFF_SERVICE_URL: http://staff-service:3002
+      PATIENT_SERVICE_URL: http://patient-service:3003
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy } # outbox poller, reminder / no-show jobs (BullMQ)
+      kafka-init: { condition: service_completed_successfully } # publishes appointment.events
 
   medical-record-service:
     <<: *service

@@ -1,4 +1,5 @@
 import { EventEnvelope } from './envelope';
+import { AppointmentEventPayloads } from './events/appointment.events';
 import { AuthEventPayloads } from './events/auth.events';
 import { ConfigurationsEventPayloads } from './events/configurations.events';
 import { PatientEventPayloads } from './events/patient.events';
@@ -9,7 +10,8 @@ import { StaffEventPayloads } from './events/staff.events';
 export type EventPayloadMap = AuthEventPayloads &
   ConfigurationsEventPayloads &
   StaffEventPayloads &
-  PatientEventPayloads;
+  PatientEventPayloads &
+  AppointmentEventPayloads;
 
 export type EventType = keyof EventPayloadMap;
 

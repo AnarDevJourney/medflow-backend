@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { DomainEvent, EventEnvelope } from '@medflow/contracts';
 import { ActionHistory } from '../entities/action-history.entity';
+import { appointmentTemplates } from './appointment.templates';
 import { authTemplates } from './auth.templates';
 import { configurationsTemplates } from './configurations.templates';
 import {
@@ -21,6 +22,7 @@ const TEMPLATES: HistoryTemplates<HistoryEventType> = {
   ...configurationsTemplates,
   ...staffTemplates,
   ...patientTemplates,
+  ...appointmentTemplates,
 };
 
 const SKIPPED: ReadonlySet<string> = new Set(NOT_IN_HISTORY);
