@@ -43,6 +43,10 @@ export class Notification {
   @Column({ type: 'boolean', default: false })
   isUrgent: boolean;
 
+  // Data for the translated text: names, MRN, ISO times — never clinical
+  @Column({ type: 'jsonb', default: {} })
+  params: Record<string, string | null>;
+
   @Column({ type: 'boolean', default: false })
   isRead: boolean;
 

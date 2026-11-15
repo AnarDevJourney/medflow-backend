@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { DomainEvent, EventEnvelope } from '@medflow/contracts';
 import { Notification } from '../entities/notification.entity';
+import { appointmentNotifications } from './appointment.notifications';
 import { authNotifications } from './auth.notifications';
 import {
   NotificationDraft,
@@ -16,6 +17,7 @@ export type NewNotification = Omit<
 // templates of its service in here (appointmentNotifications, …).
 const TEMPLATES: NotificationTemplates = {
   ...authNotifications,
+  ...appointmentNotifications,
 };
 
 // (eventType, envelope) → notification rows, one per recipient (DOC 6.7)
@@ -43,6 +45,7 @@ export class NotificationMapper {
       entityId: draft.entityId ?? null,
       link: draft.link ?? null,
       isUrgent: draft.isUrgent ?? false,
+      params: draft.params ?? {},
     }));
   }
 }

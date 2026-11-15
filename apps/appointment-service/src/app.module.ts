@@ -3,8 +3,9 @@ import { join } from 'node:path';
 import { createConfigModule, HealthModule, RedisModule } from '@medflow/common';
 import { Topics } from '@medflow/contracts';
 import { DatabaseModule } from '@medflow/database';
-import { KafkaModule, OutboxModule } from '@medflow/kafka';
+import { KafkaConsumerModule, KafkaModule, OutboxModule } from '@medflow/kafka';
 import { envValidationSchema } from './config/env.validation';
+import { PatientEventsConsumer } from './consumers/patient-events.consumer';
 import { AppointmentsModule } from './modules/appointments/appointments.module';
 
 @Module({
@@ -16,8 +17,10 @@ import { AppointmentsModule } from './modules/appointments/appointments.module';
     RedisModule,
     KafkaModule.forRoot({ serviceName: 'appointment-service' }),
     OutboxModule.forRoot({ topic: Topics.APPOINTMENT }),
+    KafkaConsumerModule,
     HealthModule,
     AppointmentsModule,
   ],
+  providers: [PatientEventsConsumer],
 })
 export class AppModule {}

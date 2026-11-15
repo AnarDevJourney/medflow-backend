@@ -48,12 +48,19 @@ export class MailerService {
         ? dateFormat.format(new Date(value))
         : '',
     );
+    // Patient emails: "27 noyabr 2026, cümə, saat 09:00" (clinic time)
+    hbs.registerHelper('visitTime', (value: unknown) =>
+      typeof value === 'string' && !Number.isNaN(Date.parse(value))
+        ? visitTimeAz(value)
+        : '',
+    );
     const layout = hbs.compile(LAYOUT_HTML);
     for (const [name, source] of Object.entries(EMAIL_TEMPLATES)) {
       const html = hbs.compile(source.html); // HTML-escaped (names come from users)
       const text = hbs.compile(source.text, { noEscape: true });
+      const az = 'lang' in source && source.lang === 'az';
       this.templates.set(name as EmailTemplateName, {
-        html: (data) => layout({ body: html(data) }),
+        html: (data) => layout({ body: html(data), az }),
         text,
       });
     }
@@ -79,4 +86,26 @@ export class MailerService {
       messageId: `<${email.messageId}@medflow.az>`,
     });
   }
+}
+
+const azDay = new Intl.DateTimeFormat('az', {
+  timeZone: 'Asia/Baku',
+  day: 'numeric',
+  month: 'long',
+  year: 'numeric',
+});
+const azWeekday = new Intl.DateTimeFormat('az', {
+  timeZone: 'Asia/Baku',
+  weekday: 'long',
+});
+const azTime = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Baku',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+export function visitTimeAz(iso: string): string {
+  const d = new Date(iso);
+  return `${azDay.format(d)}, ${azWeekday.format(d)}, saat ${azTime.format(d)}`;
 }

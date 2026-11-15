@@ -115,6 +115,10 @@ export class Appointment {
   @Column({ type: 'timestamptz', nullable: true })
   startedAt: Date | null;
 
+  // The 24-hours-before reminder went out (phase 7.4)
+  @Column({ type: 'timestamptz', nullable: true })
+  reminderSentAt: Date | null;
+
   @Column({ type: 'timestamptz', nullable: true })
   completedAt: Date | null;
 

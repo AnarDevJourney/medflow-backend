@@ -26,6 +26,7 @@ import {
 } from './appointment.mapper';
 import { AvailabilityService } from './availability.service';
 import { PatientClient } from './clients/patient.client';
+import { AppointmentJobsService } from './jobs/appointment-jobs.service';
 import { addDays, clinicDate, clinicInstant, clinicToday } from './clinic-time';
 import {
   CancelAppointmentDto,
@@ -96,6 +97,7 @@ export class AppointmentsService {
     private readonly outbox: OutboxService,
     private readonly availability: AvailabilityService,
     private readonly patients: PatientClient,
+    private readonly jobs: AppointmentJobsService,
   ) {}
 
   // Filters on the snapshots only — no calls to other services
@@ -228,6 +230,7 @@ export class AppointmentsService {
         });
         return row;
       });
+      await this.jobs.planReminder(saved);
       return toAppointmentResponse(saved);
     } catch (error) {
       throw toSlotTaken(error);
@@ -327,10 +330,12 @@ export class AppointmentsService {
           ...toAppointmentPayload(updated),
           reason: dto.reason,
           previousStatus,
+          notifyPatient: true,
         },
       });
       return updated;
     });
+    await this.jobs.cancelReminder(saved.id);
     return toAppointmentResponse(saved);
   }
 
@@ -381,6 +386,7 @@ export class AppointmentsService {
         row.endsAt = new Date(startsAt.getTime() + day.slotMinutes * 60_000);
         row.updatedBy = actor.id;
         row.updatedByName = actor.name;
+        row.reminderSentAt = null;
         const updated = await em.save(row);
         await this.outbox.add(em, {
           eventType: AppointmentEvents.APPOINTMENT_RESCHEDULED,
@@ -391,6 +397,8 @@ export class AppointmentsService {
         });
         return updated;
       });
+      // A moved visit gets a fresh reminder (sent again if already sent)
+      await this.jobs.planReminder(saved);
       return toAppointmentResponse(saved);
     } catch (error) {
       throw toSlotTaken(error);

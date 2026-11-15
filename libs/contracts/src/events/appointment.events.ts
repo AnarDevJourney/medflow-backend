@@ -10,6 +10,14 @@ export const AppointmentEvents = {
   APPOINTMENT_RESCHEDULED: 'appointment.rescheduled',
   APPOINTMENT_CHECKED_IN: 'appointment.checked_in',
   APPOINTMENT_CANCELLED: 'appointment.cancelled',
+  APPOINTMENT_NO_SHOW: 'appointment.no_show',
+  APPOINTMENT_REMINDER_DUE: 'appointment.reminder_due',
+} as const;
+
+// Cancellation reasons written by the system, not typed by a person — the
+// UI translates them (appointments.systemReasons.*)
+export const SYSTEM_CANCEL_REASONS = {
+  PATIENT_DEACTIVATED: 'PATIENT_DEACTIVATED',
 } as const;
 
 export type AppointmentTypeName = 'CONSULTATION' | 'FOLLOW_UP' | 'CHECK_UP';
@@ -48,10 +56,13 @@ export interface AppointmentRescheduledPayload extends AppointmentPayload {
   };
 }
 
-// The slot is free again. reason = the front desk's cancellation note
+// The slot is free again. reason = the front desk's cancellation note, or
+// a SYSTEM_CANCEL_REASONS code. notifyPatient false → no email (e.g. the
+// record was deactivated: duplicate or deceased).
 export interface AppointmentCancelledPayload extends AppointmentPayload {
   reason: string;
   previousStatus: 'SCHEDULED' | 'CHECKED_IN';
+  notifyPatient: boolean;
 }
 
 export interface AppointmentEventPayloads {
@@ -60,4 +71,8 @@ export interface AppointmentEventPayloads {
   [AppointmentEvents.APPOINTMENT_RESCHEDULED]: AppointmentRescheduledPayload;
   [AppointmentEvents.APPOINTMENT_CHECKED_IN]: AppointmentPayload;
   [AppointmentEvents.APPOINTMENT_CANCELLED]: AppointmentCancelledPayload;
+  // The patient did not come: still SCHEDULED 60 min after the end (job)
+  [AppointmentEvents.APPOINTMENT_NO_SHOW]: AppointmentPayload;
+  // 24 h before the visit (delayed job) → reminder email
+  [AppointmentEvents.APPOINTMENT_REMINDER_DUE]: AppointmentPayload;
 }

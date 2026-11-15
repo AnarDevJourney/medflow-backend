@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { DomainEvent, EventEnvelope } from '@medflow/contracts';
 import type { EmailTemplateName } from '../templates';
+import { appointmentEmails } from './appointment.emails';
 import { authEmails } from './auth.emails';
 import { EmailDraft, EmailTemplates } from './email-template';
 
@@ -19,6 +20,7 @@ export interface EmailRow {
 // templates of its service in here (appointmentEmails, billingEmails, …).
 const TEMPLATES: EmailTemplates = {
   ...authEmails,
+  ...appointmentEmails,
 };
 
 // (eventType, envelope) → emails, one per (template, recipient) (DOC 6.7)

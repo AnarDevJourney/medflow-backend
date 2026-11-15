@@ -10,6 +10,8 @@ export interface NotificationDraft {
   entityId?: string;
   link?: string; // frontend route
   isUrgent?: boolean;
+  // Data for the translated text (frontend notificationTypes.<TYPE>)
+  params?: Record<string, string | null>;
 }
 
 // Only the events that notify someone have a template; every other event

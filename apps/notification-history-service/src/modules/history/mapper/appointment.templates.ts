@@ -76,6 +76,13 @@ export const appointmentTemplates: HistoryTemplates<AppointmentEventType> = {
       'appointment.checkedIn',
     ),
 
+  'appointment.no_show': (event) =>
+    entry(
+      event,
+      `marked ${who(event.payload)} as not come to the appointment with ${event.payload.doctorName} at ${event.payload.startsAt}`,
+      'appointment.noShow',
+    ),
+
   'appointment.cancelled': (event) => {
     const p = event.payload;
     return {

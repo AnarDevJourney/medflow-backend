@@ -31,6 +31,7 @@ export const message = (
 // Events that never reach the action history (DOC 5.6)
 export const NOT_IN_HISTORY = [
   'user.password_reset_requested', // carries the reset link, nothing happened yet
+  'appointment.reminder_due', // a reminder email; visible in the email log (user decision 7.4)
 ] as const satisfies readonly EventType[];
 
 export type HistoryEventType = Exclude<

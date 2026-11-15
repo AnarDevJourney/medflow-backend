@@ -9,6 +9,7 @@ export interface NotificationResponse {
   entityId: string | null;
   link: string | null;
   isUrgent: boolean;
+  params: Record<string, string | null>;
   isRead: boolean;
   readAt: Date | null;
   createdAt: Date;
@@ -24,6 +25,7 @@ export function toNotificationResponse(n: Notification): NotificationResponse {
     entityId: n.entityId,
     link: n.link,
     isUrgent: n.isUrgent,
+    params: n.params ?? {},
     isRead: n.isRead,
     readAt: n.readAt,
     createdAt: n.createdAt,
@@ -43,6 +45,7 @@ export interface NotificationRow {
   entity_id: string | null;
   link: string | null;
   is_urgent: boolean;
+  params: Record<string, string | null> | null;
   is_read: boolean;
   read_at: Date | null;
   created_at: Date;
@@ -58,6 +61,7 @@ export function rowToResponse(row: NotificationRow): NotificationResponse {
     entityId: row.entity_id,
     link: row.link,
     isUrgent: row.is_urgent,
+    params: row.params ?? {},
     isRead: row.is_read,
     readAt: row.read_at,
     createdAt: row.created_at,

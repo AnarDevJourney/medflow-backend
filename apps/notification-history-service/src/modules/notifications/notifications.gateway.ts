@@ -15,6 +15,8 @@ import {
   AUTH_COOKIES,
   ErrorCode,
   isAccessTokenRevoked,
+  PERMISSIONS,
+  permissionsCacheKey,
   readCookie,
   REDIS_CLIENT,
   Role,
@@ -36,6 +38,7 @@ export const SERVER_EVENTS = {
   SESSION_EXPIRED: 'session:expired', // access token expired → refresh, reconnect
   SESSION_REVOKED: 'session:revoked', // logged out elsewhere / deactivated → login
   PERMISSIONS: 'permissions:updated', // { role, permissions } — the role's new list
+  APPOINTMENTS: 'appointments:changed', // { dates } — clinic days whose appointments changed
 } as const;
 
 interface SocketUser {
@@ -120,6 +123,29 @@ export class NotificationsGateway
     this.server
       .to(ROOMS.role(role))
       .emit(SERVER_EVENTS.PERMISSIONS, { role, permissions });
+  }
+
+  // An appointment was booked / moved / changed: clients that can see
+  // appointments refetch their lists and calendars. Only roles holding
+  // appointments.read (Redis cache of configurations-service, else the
+  // catalog defaults); the payload is just the clinic days.
+  async pushAppointmentsChanged(dates: string[]) {
+    if (dates.length === 0) return;
+    const roles: Role[] = [];
+    for (const role of Object.values(Role)) {
+      const cached = await this.redis.get(permissionsCacheKey(role));
+      const allowed =
+        cached !== null
+          ? cached.split(',').includes('appointments.read')
+          : (
+              PERMISSIONS['appointments.read'].defaultRoles as readonly Role[]
+            ).includes(role);
+      if (allowed) roles.push(role);
+    }
+    if (roles.length === 0) return;
+    this.server
+      .to(roles.map((role) => ROOMS.role(role)))
+      .emit(SERVER_EVENTS.APPOINTMENTS, { dates: [...new Set(dates)] });
   }
 
   // Fresh unread counts of several users with one query

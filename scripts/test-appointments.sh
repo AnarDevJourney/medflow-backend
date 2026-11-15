@@ -1,5 +1,12 @@
 #!/bin/bash
 # End-to-end checks of appointment-service through the gateway.
+# Notifications + emails (7.4): doctor in-app notifications (params, link,
+# not for own actions, moved away / to), patient emails in Azerbaijani
+# (booked, rescheduled, cancelled, reminder; none for system cancels),
+# appointments:changed socket push only to roles with appointments.read.
+# Jobs + sync (7.4): patient.updated → future snapshots, patient.deactivated
+# → system cancellations (no patient email), reminder job planned / moved /
+# removed / sent once, no-show sweep.
 # Changes (7.2): edit (type / reason / notes, only changed fields, no-op →
 # no event), reschedule (time and / or doctor, same rules, freed slot),
 # check-in (appointment day only), cancel (reason, slot freed, past
@@ -15,6 +22,7 @@
 # Needs the Docker stack: ./scripts/run-all.sh, then ./scripts/test-appointments.sh
 # Creates two test doctors + patients and deletes them (history rows stay).
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+source scripts/lib/mailpit.sh
 API=http://localhost:3000/api/v1
 A=$API/appointments
 AV=$A/availability
@@ -294,13 +302,13 @@ check "bad departmentId → 400" 400 "$(as $REC "$A/today?departmentId=nope")"
 echo "Internal API"
 redis_flush_rl
 SVC=http://localhost:3004
-svc() { # svc <nokey|key> <url> → status, body in $D/body
+svc() { # svc <nokey|key> <url> [method] → status, body in $D/body
   local out
   out=$($DC exec -T appointment-service node -e '
-    const [mode, url] = process.argv.slice(1);
+    const [mode, url, method] = process.argv.slice(1);
     const headers = mode === "key" ? { "x-internal-key": process.env.INTERNAL_API_KEY } : {};
-    fetch(url, { headers }).then(async (r) => process.stdout.write(r.status + "\n" + (await r.text())));
-  ' "$1" "$2")
+    fetch(url, { headers, method: method || "GET" }).then(async (r) => process.stdout.write(r.status + "\n" + (await r.text())));
+  ' "$1" "$2" "$3")
   echo "$out" | tail -n +2 > $D/body
   echo "$out" | head -1
 }
@@ -326,6 +334,115 @@ check "15 days → 400" 400 "$(as $REC "$CAL?from=$D2&to=$(day 16)")"
 check "to before from → 400" 400 "$(as $REC "$CAL?from=$D3&to=$D2")"
 check "missing to → 400" 400 "$(as $REC "$CAL?from=$D2")"
 check "bad includeCancelled → 400" 400 "$(as $REC "$CAL?from=$D2&to=$D2&includeCancelled=maybe")"
+
+echo "Patient sync"
+redis_flush_rl
+wait_sql() { # wait_sql <sql returning one value> <expected> → the value (≤ 20 s)
+  local v
+  for _ in $(seq 1 40); do v=$(aq "$1"); [ "$v" = "$2" ] && break; sleep 0.5; done
+  echo "$v"
+}
+PAST=$(ins $P1 "Leyla $SUR" $U1 $(day -3) 09:00 COMPLETED)
+A3=$(aq "select id from appointments where patient_id='$P1' and status='SCHEDULED' and starts_at > now() order by starts_at limit 1")
+check "rename the patient → 200" 200 "$(as_admin -X PATCH $API/patients/$P1 -H 'content-type: application/json' -d '{"firstName":"Leylan","phone":"+994 55 999 88 77"}')"
+check "  future SCHEDULED snapshot refreshed" "Leylan $SUR|+994 55 999 88 77" "$(wait_sql "select patient_name||'|'||patient_phone from appointments where id='$A3'" "Leylan $SUR|+994 55 999 88 77")"
+check "  past appointment keeps the old name" "Leyla $SUR" "$(aq "select patient_name from appointments where id='$PAST'")"
+check "  no appointment event for it" 0 "$(aq "select count(*) from outbox_events where aggregate_id='$A3' and event_type='appointment.updated' and occurred_at > now() - interval '1 minute'")"
+check "a non-snapshot field (notes) → nothing changes" 200 "$(as_admin -X PATCH $API/patients/$P1 -H 'content-type: application/json' -d '{"notes":"x"}')"
+P2FUT=$(aq "select count(*) from appointments where patient_id='$P2' and status='SCHEDULED' and starts_at > now()")
+check "deactivate a patient with future visits → 200" "200|true" "$(as_admin -X PATCH $API/patients/$P2/deactivate)|$([ "$P2FUT" -gt 0 ] && echo true)"
+check "  future visits cancelled by the system" "0" "$(wait_sql "select count(*) from appointments where patient_id='$P2' and status='SCHEDULED' and starts_at > now()" 0)"
+check "  reason code, no person" "PATIENT_DEACTIVATED||" "$(aq "select cancellation_reason||'|'||coalesce(cancelled_by::text,'')||'|'||coalesce(cancelled_by_name,'') from appointments where patient_id='$P2' and status='CANCELLED' and cancellation_reason='PATIENT_DEACTIVATED' limit 1")"
+check "  events: no patient email, system actor" "$P2FUT|false|null" "$(aq "select count(*) from outbox_events o join appointments a on a.id=o.aggregate_id where a.patient_id='$P2' and o.payload->'payload'->>'reason'='PATIENT_DEACTIVATED'")|$(aq "select o.payload->'payload'->>'notifyPatient' from outbox_events o join appointments a on a.id=o.aggregate_id where a.patient_id='$P2' and o.payload->'payload'->>'reason'='PATIENT_DEACTIVATED' limit 1")|$(aq "select coalesce(o.payload->>'actor','null') from outbox_events o join appointments a on a.id=o.aggregate_id where a.patient_id='$P2' and o.payload->'payload'->>'reason'='PATIENT_DEACTIVATED' limit 1")"
+as_admin -X PATCH $API/patients/$P2/reactivate >/dev/null
+check "  reactivating does not bring them back" "0" "$(aq "select count(*) from appointments where patient_id='$P2' and status='SCHEDULED' and starts_at > now()")"
+
+echo "Reminder job"
+redis_flush_rl
+R9=$(at $D3 09:30)
+check "book day +3 09:30 → 201" 201 "$(book $REC "$(body $P1 $U1 $R9)")"
+R1=$(j .id | tr -d '"')
+expect_delay() { echo $(( ($(date -d "$1" +%s) - 86400 - $(date +%s)) * 1000 )); } # startsAt − 24 h − now, ms
+near() { [ $(( $1 > $2 ? $1 - $2 : $2 - $1 )) -lt 90000 ] && echo near || echo "off($1 vs $2)"; }
+check "  reminder planned at start − 24 h" "200|true|near" "$(svc key "$SVC/internal/jobs/reminders/$R1")|$(j .planned)|$(near $(j .delayMs) $(expect_delay $R9))"
+R10=$(at $D3 10:30)
+pat $REC $R1 reschedule "{\"startsAt\":\"$R10\"}" >/dev/null
+check "  moved with the reschedule" "true|near" "$(svc key "$SVC/internal/jobs/reminders/$R1" >/dev/null; j .planned)|$(near $(j .delayMs) $(expect_delay $R10))"
+check "run it now → sent" '200|true' "$(svc key "$SVC/internal/jobs/reminders/$R1/run" POST)|$(j .sent)"
+check "  event appointment.reminder_due, system actor" "1|null" "$(events $R1 appointment.reminder_due)|$(aq "select coalesce(payload->>'actor','null') from outbox_events where aggregate_id='$R1' and event_type='appointment.reminder_due'")"
+check "  again → not sent twice" '200|false|1' "$(svc key "$SVC/internal/jobs/reminders/$R1/run" POST)|$(j .sent)|$(events $R1 appointment.reminder_due)"
+sleep 3
+check "  not in the action history" 0 "$(hq "select count(*) from action_history where entity_id='$R1' and event_type='appointment.reminder_due'")"
+pat $REC $R1 reschedule "{\"startsAt\":\"$R9\"}" >/dev/null
+check "rescheduled → reminder due again" "true|true" "$(svc key "$SVC/internal/jobs/reminders/$R1" >/dev/null; j .planned)|$(svc key "$SVC/internal/jobs/reminders/$R1/run" POST >/dev/null; j .sent)"
+pat $REC $R1 cancel '{"reason":"test"}' >/dev/null
+check "cancelled → reminder removed, not sent" "false|false" "$(svc key "$SVC/internal/jobs/reminders/$R1" >/dev/null; j .planned)|$(svc key "$SVC/internal/jobs/reminders/$R1/run" POST >/dev/null; j .sent)"
+check "jobs without the key → 401" 401 "$(svc nokey "$SVC/internal/jobs/no-show-sweep" POST)"
+
+echo "No-show sweep"
+redis_flush_rl
+NS=$(ins $P1 "Leylan $SUR" $U1 $(day -1) 10:00)
+check "sweep → marks the old scheduled visit" "200|true" "$(svc key "$SVC/internal/jobs/no-show-sweep" POST)|$(j '.marked >= 1')"
+check "  NO_SHOW + event with system actor" "NO_SHOW|1|null" "$(aq "select status from appointments where id='$NS'")|$(events $NS appointment.no_show)|$(aq "select coalesce(payload->>'actor','null') from outbox_events where aggregate_id='$NS' and event_type='appointment.no_show'")"
+check "  history (System)" "appointment.noShow|" "$(wait_history appointment.noShow $NS)|$(hq "select coalesce(actor_name,'') from action_history where summary_key='appointment.noShow' and entity_id='$NS'")"
+check "  future visits untouched" SCHEDULED "$(aq "select status from appointments where id='$A3'")"
+check "  second sweep → not marked again" "1" "$(svc key "$SVC/internal/jobs/no-show-sweep" POST >/dev/null; events $NS appointment.no_show)"
+check "  the no-show slot can be booked again (SQL)" 1 "$(aq "select count(*) from (select 1) x where '$(ins $P2 "Sevinc $SUR" $U1 $(day -1) 10:00 COMPLETED)' <> ''")"
+
+echo "Notifications + emails"
+redis_flush_rl
+nq() { hq "$1"; }
+wait_notif() { # wait_notif <recipient> <type> <entity> → count (≤ 20 s)
+  local c
+  for _ in $(seq 1 40); do c=$(nq "select count(*) from notifications where recipient_id='$1' and type='$2' and entity_id='$3'"); [ "$c" -gt 0 ] && break; sleep 0.5; done
+  echo "$c"
+}
+wait_mail() { # wait_mail <template> <entity startsAt-free key: event aggregate> → status of the email_logs row (≤ 30 s)
+  local v
+  for _ in $(seq 1 60); do v=$(nq "select status from email_logs where template='$1' and recipient_email='$2' order by created_at desc limit 1"); [ "$v" = SENT ] && break; sleep 0.5; done
+  echo "$v"
+}
+MAIL1="leyla.$TAG@mail.test"
+node scripts/lib/socket-listen.mjs http://localhost:3000 "$REC" 14 > $D/sock 2>&1 &
+SOCK=$!
+sleep 1.5
+N9=$(at $(day 4) 09:00)
+check "book → 201" 201 "$(book $REC "$(body $P1 $U3 $N9 ',"type":"FOLLOW_UP"')")"
+N1=$(j .id | tr -d '"')
+check "  doctor U3 notified (APPOINTMENT_BOOKED)" 1 "$(wait_notif $U3 APPOINTMENT_BOOKED $N1)"
+check "  params for the translated text, no contacts" "Leylan $SUR|$(echo $N9 | sed 's/Z$//')|false" "$(nq "select (params->>'name')||'|'||replace(params->>'startsAt','.000Z','')||'|'||(params::text like '%@%') from notifications where entity_id='$N1' and type='APPOINTMENT_BOOKED'")"
+check "  link opens the day with the drawer" "/appointments?view=day&date=$(day 4)&open=$N1" "$(nq "select link from notifications where entity_id='$N1' and type='APPOINTMENT_BOOKED'")"
+check "  confirmation email to the patient (az)" "SENT" "$(wait_mail appointment-booked $MAIL1)"
+MID=$(curl -s -G "$MAILPIT/search" --data-urlencode "query=to:$MAIL1" --data-urlencode limit=1 | grep -o '"ID":"[^"]*"' | head -1 | cut -d'"' -f4)
+check "  email text: greeting, doctor, clinic time" "true|true|true" "$(curl -s "$MAILPIT/message/$MID" > $D/mail; jq -r '.HTML | contains("Hörmətli")' $D/mail)|$(jq -r '.HTML | contains("Kamran Testov")' $D/mail)|$(jq -r ".HTML | contains(\"saat 09:00\")" $D/mail)"
+check "  az footer" true "$(jq -r '.HTML | contains("avtomatik məktubudur")' $D/mail)"
+SELF=$(tok ADMIN $U3)
+check "booking by the doctor themself (admin token) → no notification for them" "201|0" "$(book $SELF "$(body $P1 $U3 $(at $(day 4) 10:00))")|$(sleep 3; nq "select count(*) from notifications where recipient_id='$U3' and entity_id='$(j .id | tr -d '"')'")"
+pat $REC $N1 reschedule "{\"startsAt\":\"$(at $(day 4) 11:00)\",\"doctorId\":\"$U1\"}" >/dev/null
+check "moved to another doctor → old one APPOINTMENT_MOVED_AWAY, new one BOOKED" "1|1" "$(wait_notif $U3 APPOINTMENT_MOVED_AWAY $N1)|$(wait_notif $U1 APPOINTMENT_BOOKED $N1)"
+check "  reschedule email" SENT "$(wait_mail appointment-rescheduled $MAIL1)"
+pat $REC $N1 reschedule "{\"startsAt\":\"$(at $(day 4) 11:30)\"}" >/dev/null
+check "moved in time → APPOINTMENT_RESCHEDULED with the previous time" "1|t" "$(wait_notif $U1 APPOINTMENT_RESCHEDULED $N1)|$(nq "select (params->>'previousStartsAt') is not null from notifications where entity_id='$N1' and type='APPOINTMENT_RESCHEDULED'")"
+pat $REC $N1 cancel '{"reason":"Called to cancel"}' >/dev/null
+check "cancelled → APPOINTMENT_CANCELLED + email" "1|SENT" "$(wait_notif $U1 APPOINTMENT_CANCELLED $N1)|$(wait_mail appointment-cancelled $MAIL1)"
+check "  the cancel reason is not in the email" false "$(sleep 1; MID=$(curl -s -G "$MAILPIT/search" --data-urlencode "query=to:$MAIL1" --data-urlencode limit=1 | grep -o '"ID":"[^"]*"' | head -1 | cut -d'"' -f4); curl -s "$MAILPIT/message/$MID" | jq -r '.HTML | contains("Called to cancel")')"
+check "system cancellation (patient deactivated) → no email" 0 "$(nq "select count(*) from email_logs where template='appointment-cancelled' and recipient_email='sevinc.$TAG@mail.test'")"
+SYSC=$(aq "select id from appointments where cancellation_reason='PATIENT_DEACTIVATED' and patient_id='$P2' limit 1")
+check "  but the doctor was told" 1 "$(nq "select count(*) from notifications where type='APPOINTMENT_CANCELLED' and entity_id='$SYSC'")"
+check "reminder email (job run earlier)" SENT "$(wait_mail appointment-reminder $MAIL1)"
+CI=$(ins $P1 "Leylan $SUR" $U3 $(day 0) 23:00)
+pat $NUR $CI check-in >/dev/null
+check "check-in → urgent APPOINTMENT_CHECKED_IN for the doctor" "1|t" "$(wait_notif $U3 APPOINTMENT_CHECKED_IN $CI)|$(nq "select is_urgent from notifications where entity_id='$CI' and type='APPOINTMENT_CHECKED_IN'")"
+check "no-show → APPOINTMENT_NO_SHOW for the doctor" 1 "$(wait_notif $U1 APPOINTMENT_NO_SHOW $NS)"
+wait $SOCK 2>/dev/null
+check "socket: front desk got appointments:changed for that day" true "$(grep '"appointments:changed"' $D/sock | grep -q "$(day 4)" && echo true)"
+ACCT=$(tok ACCOUNTANT)
+node scripts/lib/socket-listen.mjs http://localhost:3000 "$ACCT" 6 > $D/sock2 2>&1 &
+SOCK2=$!
+sleep 1.5
+book $REC "$(body $P1 $U3 $(at $(day 4) 12:00))" >/dev/null
+wait $SOCK2 2>/dev/null
+check "  an accountant (no appointments.read) gets nothing" "true|0" "$(grep -q '"connect"' $D/sock2 && echo true)|$(grep -c 'appointments:changed' $D/sock2)"
 
 echo "Staff service down"
 $DC stop staff-service >/dev/null 2>&1

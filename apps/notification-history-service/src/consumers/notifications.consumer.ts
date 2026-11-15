@@ -40,6 +40,9 @@ const REVOKES_SESSIONS = new Set([
 // notification whose event is older than NOTIFICATION_PUSH_MAX_AGE_SECONDS
 // (e.g. replayed after an outage) is stored and counted, but not pushed as
 // a live popup.
+
+const CLINIC_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Baku' });
+
 @Injectable()
 export class NotificationsConsumer extends BaseBatchConsumer<
   NewNotification,
@@ -111,6 +114,22 @@ export class NotificationsConsumer extends BaseBatchConsumer<
     await this.gateway.pushCounts([
       ...new Set(saved.map((row) => row.recipient_id)),
     ]);
+
+    // Live calendars: the clinic days touched by fresh appointment events
+    const days = new Set<string>();
+    for (const event of events) {
+      if (!event.eventType.startsWith('appointment.')) continue;
+      if (Date.now() - Date.parse(event.occurredAt) > this.pushMaxAgeMs)
+        continue;
+      const p = event.payload as {
+        startsAt?: string;
+        previous?: { startsAt?: string };
+      };
+      for (const iso of [p.startsAt, p.previous?.startsAt]) {
+        if (iso) days.add(CLINIC_DAY.format(new Date(iso)));
+      }
+    }
+    await this.gateway.pushAppointmentsChanged([...days]);
 
     for (const event of events) {
       // A replayed old list must not reach the clients
