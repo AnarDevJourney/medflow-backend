@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AppointmentStatsService } from './appointment-stats.service';
 import { AppointmentsController } from './appointments.controller';
 import { AppointmentsService } from './appointments.service';
 import { AvailabilityService } from './availability.service';
@@ -23,6 +24,7 @@ import { PatientSyncService } from './patient-sync.service';
     AppointmentsService,
     AvailabilityService,
     CalendarService,
+    AppointmentStatsService,
     AppointmentJobsService,
     PatientSyncService,
     StaffClient,

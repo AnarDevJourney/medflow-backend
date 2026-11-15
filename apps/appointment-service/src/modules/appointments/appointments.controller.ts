@@ -11,6 +11,7 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '@medflow/common';
 import type { CurrentUserData } from '@medflow/common';
+import { AppointmentStatsService } from './appointment-stats.service';
 import { AppointmentsService } from './appointments.service';
 import { AvailabilityService } from './availability.service';
 import { CalendarService } from './calendar.service';
@@ -24,6 +25,7 @@ import {
 } from './dto/change-appointment.dto';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { ListAppointmentsQueryDto } from './dto/list-appointments-query.dto';
+import { StatsQueryDto } from './dto/stats-query.dto';
 
 // DOC 8.5. Cancel / reschedule / edit share appointments.book with booking
 // (the same desk roles); PATCH /:id (type, reason, notes) is our addition.
@@ -34,6 +36,7 @@ export class AppointmentsController {
     private readonly appointments: AppointmentsService,
     private readonly availabilityService: AvailabilityService,
     private readonly calendarService: CalendarService,
+    private readonly statsService: AppointmentStatsService,
   ) {}
 
   // Fixed paths before :id, so they are not taken for an appointment id
@@ -47,6 +50,18 @@ export class AppointmentsController {
   @RequirePermission('appointments.read')
   calendar(@Query() query: CalendarQueryDto) {
     return this.calendarService.calendar(query);
+  }
+
+  @Get('stats/overview')
+  @RequirePermission('appointments.stats')
+  statsOverview(@Query() query: StatsQueryDto) {
+    return this.statsService.overview(query);
+  }
+
+  @Get('stats/doctor')
+  @RequirePermission('appointments.stats_own')
+  statsDoctor(@CurrentUser() viewer: CurrentUserData) {
+    return this.statsService.forDoctor(viewer.id);
   }
 
   @Get('today')

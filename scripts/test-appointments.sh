@@ -254,8 +254,8 @@ redis_flush_rl
 # Today's appointments are inserted directly: the schedule's slots for
 # today may already be over when the script runs
 ins() { # ins <patientId> <patientName> <doctorId> <day> <HH:MM> [status] → id
-  aq "insert into appointments (patient_id, doctor_id, department_id, patient_name, patient_mrn, patient_phone, doctor_name, department_name, department_code, starts_at, ends_at, status, created_by)
-      values ('$1', '$3', '$CARD', '$2', 'P-T', '+994 50 000 00 00', 'Zaur Testov', 'Cardiology', 'CARD', '$(at $4 $5)', '$(at $4 $5)'::timestamptz + interval '30 minutes', '${6:-SCHEDULED}', '$U1') returning id" | head -1
+  aq "insert into appointments (patient_id, doctor_id, department_id, patient_name, patient_mrn, patient_phone, doctor_name, department_name, department_code, starts_at, ends_at, status, cancelled_at, created_by)
+      values ('$1', '$3', '$CARD', '$2', 'P-T', '+994 50 000 00 00', 'Zaur Testov', 'Cardiology', 'CARD', '$(at $4 $5)', '$(at $4 $5)'::timestamptz + interval '30 minutes', '${6:-SCHEDULED}', case when '${6:-SCHEDULED}' = 'CANCELLED' then now() end, '$U1') returning id" | head -1
 }
 T1=$(ins $P2 "Sevinc $SUR" $U1 $(day 0) 22:00)
 check "not the appointment's day → 422" '422|"NOT_APPOINTMENT_DAY"' "$(pat $REC $A1 check-in)|$(j .error.details.reason)"
@@ -443,6 +443,38 @@ sleep 1.5
 book $REC "$(body $P1 $U3 $(at $(day 4) 12:00))" >/dev/null
 wait $SOCK2 2>/dev/null
 check "  an accountant (no appointments.read) gets nothing" "true|0" "$(grep -q '"connect"' $D/sock2 && echo true)|$(grep -c 'appointments:changed' $D/sock2)"
+
+echo "Stats"
+redis_flush_rl
+ST=$A/stats
+check "overview: doctor → 403" 403 "$(as $(tok DOCTOR $U1) $ST/overview)"
+check "overview: receptionist → 403" 403 "$(as $REC $ST/overview)"
+check "doctor stats: admin → 403" 403 "$(as $ADM $ST/doctor)"
+check "overview: admin, default last 30 days" "200|30|\"$(day 0)\"" "$(as $ADM $ST/overview)|$(j '.daily|length')|$(j .to)"
+check "  shape" '["byStatus","daily","departments","doctors","from","noShowRate","to","total"]' "$(j keys)"
+# A quiet past range: snapshot, add known rows, compare the difference
+SF=$(day -45); STO=$(day -44)
+as $ADM "$ST/overview?from=$SF&to=$STO" >/dev/null; cp $D/body $D/s1
+for x in "COMPLETED 09:00 $SF" "COMPLETED 09:30 $SF" "NO_SHOW 10:00 $SF" "CANCELLED 10:30 $STO" "COMPLETED 11:00 $STO"; do set -- $x; ins $P1 "Leylan $SUR" $U1 $3 $2 $1 >/dev/null; done
+as $ADM "$ST/overview?from=$SF&to=$STO" >/dev/null; cp $D/body $D/s2
+sd() { echo $(( $(jq "(.data // .) | $1" $D/s2) - $(jq "(.data // .) | $1" $D/s1) )); }
+check "  +5 total, by status 3 / 1 / 1" "5|3|1|1" "$(sd .total)|$(sd .byStatus.COMPLETED)|$(sd .byStatus.NO_SHOW)|$(sd .byStatus.CANCELLED)"
+check "  per day (cancelled kept in its status)" "3|1|1|1" "$(sd '.daily[0].COMPLETED + .daily[0].NO_SHOW')|$(sd '.daily[1].COMPLETED')|$(sd '.daily[1].CANCELLED')|$(sd '.daily[0].NO_SHOW')"
+check "  departments / doctors count without cancelled" "4|4" "$(sd "([.departments[] | select(.code == \"CARD\") | .count] | add // 0)")|$(sd "([.doctors[] | select(.doctorId == \"$U1\") | .count] | add // 0)")"
+check "  no-show rate = no-show / (completed + no-show)" true "$(jq -r '(.data // .) | .noShowRate == ((.byStatus.NO_SHOW / (.byStatus.COMPLETED + .byStatus.NO_SHOW) * 1000 | round) / 10)' $D/s2)"
+check "  to before from → 400" 400 "$(as $ADM "$ST/overview?from=$STO&to=$SF")"
+check "  more than 366 days → 400" 400 "$(as $ADM "$ST/overview?from=$(day -400)&to=$(day 0)")"
+check "  bad date → 400" 400 "$(as $ADM "$ST/overview?from=2026-13-01")"
+DT=$(tok DOCTOR $U1)
+as $DT $ST/doctor >/dev/null; cp $D/body $D/d1
+check "doctor stats: shape, 14 days ending today" "[\"daily\",\"next7Days\",\"noShowRate\",\"thisWeek\",\"today\",\"weeklyAverage\"]|14|\"$(day 0)\"" "$(jq -c '(.data // .) | keys' $D/d1)|$(jq '(.data // .) | .daily|length' $D/d1)|$(jq -c '(.data // .) | .daily[-1].date' $D/d1)"
+ins $P1 "Leylan $SUR" $U1 $(day 0) 23:30 >/dev/null
+as $DT $ST/doctor >/dev/null; cp $D/body $D/d2
+dd2() { echo $(( $(jq "(.data // .) | $1" $D/d2) - $(jq "(.data // .) | $1" $D/d1) )); }
+check "  a visit today → today +1, this week +1, last day +1" "1|1|1" "$(dd2 .today)|$(dd2 .thisWeek)|$(dd2 '.daily[-1].count')"
+EXP=$(aq "select case when sum(case when status in ('COMPLETED','NO_SHOW') then 1 else 0 end) = 0 then 'null' else trim(to_char(round(100.0 * sum(case when status='NO_SHOW' then 1 else 0 end) / sum(case when status in ('COMPLETED','NO_SHOW') then 1 else 0 end), 1), 'FM990.0')) end from appointments where doctor_id='$U1' and starts_at >= '$(at $(day -89) 00:00)' and starts_at < '$(at $(day 1) 00:00)'")
+check "  own no-show rate (last 90 days)" "$EXP" "$(jq -r '(.data // .) | .noShowRate | if . == null then "null" else (. * 10 | round / 10 | tostring | if test("\\.") then . else . + ".0" end) end' $D/d2)"
+check "  only their own appointments" "0" "$(as $(tok DOCTOR $(cat /proc/sys/kernel/random/uuid)) $ST/doctor >/dev/null; j '.today + .thisWeek + ([.daily[].count] | add)')"
 
 echo "Staff service down"
 $DC stop staff-service >/dev/null 2>&1
