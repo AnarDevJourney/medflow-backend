@@ -109,6 +109,9 @@ export class Appointment {
   @Column({ type: 'uuid', nullable: true })
   checkedInBy: string | null;
 
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  checkedInByName: string | null;
+
   @Column({ type: 'timestamptz', nullable: true })
   startedAt: Date | null;
 
@@ -121,12 +124,25 @@ export class Appointment {
   @Column({ type: 'uuid', nullable: true })
   cancelledBy: string | null;
 
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  cancelledByName: string | null;
+
   @Column({ type: 'varchar', length: 500, nullable: true })
   cancellationReason: string | null;
 
   // auth user id of who booked
   @Column({ type: 'uuid' })
   createdBy: string;
+
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  createdByName: string | null;
+
+  // Last reschedule / edit
+  @Column({ type: 'uuid', nullable: true })
+  updatedBy: string | null;
+
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  updatedByName: string | null;
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;

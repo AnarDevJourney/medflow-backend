@@ -21,10 +21,14 @@ export interface AppointmentResponse {
   notes: string | null;
   encounterId: string | null;
   checkedInAt: string | null;
+  checkedInByName: string | null;
   startedAt: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
+  cancelledByName: string | null;
   cancellationReason: string | null;
+  createdByName: string | null;
+  updatedByName: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -53,10 +57,14 @@ export const toAppointmentResponse = (
   notes: row.notes,
   encounterId: row.encounterId,
   checkedInAt: iso(row.checkedInAt),
+  checkedInByName: row.checkedInByName,
   startedAt: iso(row.startedAt),
   completedAt: iso(row.completedAt),
   cancelledAt: iso(row.cancelledAt),
+  cancelledByName: row.cancelledByName,
   cancellationReason: row.cancellationReason,
+  createdByName: row.createdByName,
+  updatedByName: row.updatedByName,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });

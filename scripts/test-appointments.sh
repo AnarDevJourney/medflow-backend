@@ -1,5 +1,10 @@
 #!/bin/bash
 # End-to-end checks of appointment-service through the gateway.
+# Changes (7.2): edit (type / reason / notes, only changed fields, no-op →
+# no event), reschedule (time and / or doctor, same rules, freed slot),
+# check-in (appointment day only), cancel (reason, slot freed, past
+# appointments too), invalid status transitions, today's list, the
+# internal API for record-service, name snapshots of who did what.
 # Booking (7.1): availability (slots in clinic time → UTC, booked / past /
 # patient-busy slots, time off, no department, 90-day limit), booking
 # (future, slot boundary, working hours, inactive / unknown patient,
@@ -132,7 +137,8 @@ A1=$(j .id | tr -d '"')
 check "  times (end = start + slot)" "\"$S0900\"|\"$(at $D2 09:30)\"" "$(j .startsAt | sed 's/\.000Z/Z/')|$(j .endsAt | sed 's/\.000Z/Z/')"
 check "  snapshots" "\"Leyla $SUR\"|\"$MRN1\"|\"+994 50 000 00 01\"|\"zaur testov\"|\"CARD\"" "$(j .patientName)|$(j .patientMrn)|$(j .patientPhone)|$(j '.doctorName|ascii_downcase')|$(j .departmentCode)"
 check "  SCHEDULED, FOLLOW_UP, reason trimmed, empty notes null" '"SCHEDULED"|"FOLLOW_UP"|"Chest pain"|null' "$(j .status)|$(j .type)|$(j .reason)|$(j .notes)"
-check "  fields" '["cancellationReason","cancelledAt","checkedInAt","completedAt","createdAt","departmentCode","departmentId","departmentName","doctorId","doctorName","encounterId","endsAt","id","notes","patientEmail","patientId","patientMrn","patientName","patientPhone","reason","startedAt","startsAt","status","type","updatedAt"]' "$(j keys)"
+check "  fields" '["cancellationReason","cancelledAt","cancelledByName","checkedInAt","checkedInByName","completedAt","createdAt","createdByName","departmentCode","departmentId","departmentName","doctorId","doctorName","encounterId","endsAt","id","notes","patientEmail","patientId","patientMrn","patientName","patientPhone","reason","startedAt","startsAt","status","type","updatedAt","updatedByName"]' "$(j keys)"
+check "  booked by (name snapshot)" '"Expiry Test"' "$(j .createdByName)"
 check "  created_by = the receptionist" true "$([ -n "$(aq "select created_by from appointments where id='$A1'")" ] && echo true)"
 check "  event" "appointment.created|APPOINTMENT|$MRN1|$S0900" "$(aq "select event_type||'|'||aggregate_type||'|'||(payload->'payload'->>'patientMrn')||'|'||(payload->'payload'->>'startsAt') from outbox_events where aggregate_id='$A1'" | sed 's/\.000Z/Z/')"
 check "  history" appointment.created "$(wait_history appointment.created $A1)"
@@ -200,6 +206,108 @@ check "bad sort → 400" 400 "$(as $REC "$A?sort=startsAt")"
 check "GET /:id → 200" "200|\"$A1\"" "$(as $NUR $A/$A1)|$(j .id)"
 check "  unknown → 404" 404 "$(as $REC $A/$(cat /proc/sys/kernel/random/uuid))"
 check "  bad uuid → 400" 400 "$(as $REC $A/nope)"
+
+echo "Edit"
+redis_flush_rl
+pat() { as $1 -X PATCH $A/$2${3:+/$3} -H 'content-type: application/json' -d "${4:-{\}}"; } # pat <token> <id> [action] [json]
+events() { aq "select count(*) from outbox_events where aggregate_id='$1' and event_type='$2'"; }
+check "doctor → 403" 403 "$(pat $(tok DOCTOR $U1) $A1 '' '{"notes":"x"}')"
+check "nurse → 403" 403 "$(pat $NUR $A1 '' '{"notes":"x"}')"
+check "notes + unchanged reason → 200" '200|"Bring the ECG"|"Chest pain"|"Expiry Test"' "$(pat $REC $A1 '' '{"notes":"  Bring the ECG ","reason":"Chest pain"}')|$(j .notes)|$(j .reason)|$(j .updatedByName)"
+check "  event names only the changed field" '["notes"]' "$(aq "select payload->'payload'->'changedFields' from outbox_events where aggregate_id='$A1' and event_type='appointment.updated'" | tr -d ' ')"
+check "  history" appointment.updated "$(wait_history appointment.updated $A1)"
+check "same values again → 200, no new event" "200|1" "$(pat $REC $A1 '' '{"notes":"Bring the ECG"}')|$(events $A1 appointment.updated)"
+check "type + clear notes → 200" '200|"CHECK_UP"|null' "$(pat $REC $A1 '' '{"type":"CHECK_UP","notes":""}')|$(j .type)|$(j .notes)"
+check "type null → 400" 400 "$(pat $REC $A1 '' '{"type":null}')"
+check "bad type → 400" 400 "$(pat $REC $A1 '' '{"type":"SURGERY"}')"
+check "patient cannot be changed → 400" 400 "$(pat $REC $A1 '' "{\"patientId\":\"$P2\"}")"
+check "unknown → 404" 404 "$(pat $REC $(cat /proc/sys/kernel/random/uuid) '' '{"notes":"x"}')"
+
+echo "Reschedule"
+redis_flush_rl
+S0900D3=$(at $D3 09:00)
+check "nurse → 403" 403 "$(pat $NUR $A2 reschedule "{\"startsAt\":\"$S0900D3\"}")"
+check "to day +3 09:00 → 200, end moved too" "200|\"$S0900D3\"|\"$(at $D3 09:30)\"|\"$U1\"|\"Expiry Test\"" "$(pat $REC $A2 reschedule "{\"startsAt\":\"$S0900D3\"}")|$(j .startsAt | sed 's/\.000Z/Z/')|$(j .endsAt | sed 's/\.000Z/Z/')|$(j .doctorId)|$(j .updatedByName)"
+check "  event keeps the old time" "$S1000" "$(aq "select payload->'payload'->'previous'->>'startsAt' from outbox_events where aggregate_id='$A2' and event_type='appointment.rescheduled'" | sed 's/\.000Z/Z/')"
+check "  history" appointment.rescheduled "$(wait_history appointment.rescheduled $A2)"
+check "  old slot (day +2 10:00) free again" true "$(as $REC "$AV?doctorId=$U1&date=$D2" >/dev/null; j '.slots[2].available')"
+check "same time + doctor → 400" 400 "$(pat $REC $A2 reschedule "{\"startsAt\":\"$S0900D3\"}")"
+check "onto a booked slot → 409 SLOT_TAKEN" '409|"SLOT_TAKEN"|"DOCTOR"' "$(pat $REC $A2 reschedule "{\"startsAt\":\"$S0900\"}")|$(j .error.code)|$(j .error.details.conflict)"
+check "onto a vacation day → 422 VACATION" '422|"VACATION"' "$(pat $REC $A2 reschedule "{\"startsAt\":\"$(at $(day 5) 09:00)\"}")|$(j .error.details.reason)"
+check "into the past → 422" 422 "$(pat $REC $A2 reschedule "{\"startsAt\":\"$(at $(day -1) 09:00)\"}")"
+check "off the grid → 422 NOT_A_SLOT" '"NOT_A_SLOT"' "$(pat $REC $A2 reschedule "{\"startsAt\":\"$(at $D3 09:15)\"}" >/dev/null; j .error.details.reason)"
+check "to a doctor without department → 422" '"NO_DEPARTMENT"' "$(pat $REC $A2 reschedule "{\"startsAt\":\"$(at $D3 10:00)\",\"doctorId\":\"$U2\"}" >/dev/null; j .error.details.reason)"
+check "to another doctor (U3) → 200" "200|\"$U3\"|\"Kamran Testov\"" "$(pat $REC $A2 reschedule "{\"startsAt\":\"$(at $D3 10:00)\",\"doctorId\":\"$U3\"}")|$(j .doctorId)|$(j .doctorName)"
+check "  history names both doctors" "appointment.rescheduledDoctor|Zaur Testov" "$(wait_history appointment.rescheduledDoctor $A2)|$(hq "select summary_params->>'previousDoctor' from action_history where summary_key='appointment.rescheduledDoctor' and entity_id='$A2'")"
+check "unknown → 404" 404 "$(pat $REC $(cat /proc/sys/kernel/random/uuid) reschedule "{\"startsAt\":\"$S0900D3\"}")"
+
+echo "Check-in"
+redis_flush_rl
+# Today's appointments are inserted directly: the schedule's slots for
+# today may already be over when the script runs
+ins() { # ins <patientId> <patientName> <doctorId> <day> <HH:MM> [status] → id
+  aq "insert into appointments (patient_id, doctor_id, department_id, patient_name, patient_mrn, patient_phone, doctor_name, department_name, department_code, starts_at, ends_at, status, created_by)
+      values ('$1', '$3', '$CARD', '$2', 'P-T', '+994 50 000 00 00', 'Zaur Testov', 'Cardiology', 'CARD', '$(at $4 $5)', '$(at $4 $5)'::timestamptz + interval '30 minutes', '${6:-SCHEDULED}', '$U1') returning id" | head -1
+}
+T1=$(ins $P2 "Sevinc $SUR" $U1 $(day 0) 22:00)
+check "not the appointment's day → 422" '422|"NOT_APPOINTMENT_DAY"' "$(pat $REC $A1 check-in)|$(j .error.details.reason)"
+check "doctor → 403" 403 "$(pat $(tok DOCTOR $U1) $T1 check-in)"
+check "admin → 403 (no check_in permission)" 403 "$(pat $ADM $T1 check-in)"
+check "nurse, today → 200 CHECKED_IN" '200|"CHECKED_IN"|"Expiry Test"|true' "$(pat $NUR $T1 check-in)|$(j .status)|$(j .checkedInByName)|$(j '.checkedInAt != null')"
+check "  history" appointment.checkedIn "$(wait_history appointment.checkedIn $T1)"
+check "again → 409 INVALID_STATUS" '409|"INVALID_STATUS"' "$(pat $REC $T1 check-in)|$(j .error.code)"
+check "reschedule a checked-in one → 409" 409 "$(pat $REC $T1 reschedule "{\"startsAt\":\"$S0900D3\"}")"
+check "edit notes while checked in → 200" '200|"Waiting room 2"' "$(pat $REC $T1 '' '{"notes":"Waiting room 2"}')|$(j .notes)"
+
+echo "Cancel"
+redis_flush_rl
+check "doctor → 403" 403 "$(pat $(tok DOCTOR $U1) $A1 cancel '{"reason":"x"}')"
+check "nurse → 403" 403 "$(pat $NUR $A1 cancel '{"reason":"x"}')"
+check "no reason → 400" 400 "$(pat $REC $A1 cancel)"
+check "blank reason → 400" 400 "$(pat $REC $A1 cancel '{"reason":"   "}')"
+check "checked-in patient left → 200 CANCELLED" '200|"CANCELLED"|"Left before the visit"|"Expiry Test"' "$(pat $REC $T1 cancel '{"reason":" Left before the visit "}')|$(j .status)|$(j .cancellationReason)|$(j .cancelledByName)"
+check "  event: reason + previous status" "Left before the visit|CHECKED_IN" "$(aq "select (payload->'payload'->>'reason')||'|'||(payload->'payload'->>'previousStatus') from outbox_events where aggregate_id='$T1' and event_type='appointment.cancelled'")"
+check "  history keeps the reason, no contacts" "appointment.cancelled|Left before the visit|false" "$(wait_history appointment.cancelled $T1)|$(hq "select (metadata->>'cancellationReason')||'|'||(metadata::text like '%@%') from action_history where summary_key='appointment.cancelled' and entity_id='$T1'")"
+check "cancel again → 409" 409 "$(pat $REC $T1 cancel '{"reason":"x"}')"
+check "edit a cancelled one → 409" 409 "$(pat $REC $T1 '' '{"notes":"x"}')"
+check "check in a cancelled one → 409" 409 "$(pat $NUR $T1 check-in)"
+check "scheduled → 200" 200 "$(pat $ADM $A1 cancel '{"reason":"The patient called"}')"
+check "  slot day +2 09:00 free again" 'true' "$(as $REC "$AV?doctorId=$U1&date=$D2" >/dev/null; j '.slots[0].available')"
+check "  and can be booked again" 201 "$(book $REC "$(body $P2 $U1 $S0900)")"
+T2=$(ins $P2 "Sevinc $SUR" $U1 $(day -1) 09:00)
+check "past, still scheduled → can be cancelled" 200 "$(pat $REC $T2 cancel '{"reason":"Did not come"}')"
+
+echo "Today"
+redis_flush_rl
+T3=$(ins $P1 "Leyla $SUR" $U3 $(day 0) 21:00)
+T4=$(ins $P2 "Sevinc $SUR" $U1 $(day 0) 22:30)
+aq "update appointments set doctor_name='Kamran Testov' where id='$T3'" >/dev/null
+check "accountant → 403" 403 "$(as $ACC $A/today)"
+check "receptionist → today's, in time order" "200|true|true" "$(as $REC $A/today)|$(j "[.[].id] | (index(\"$T3\") < index(\"$T1\")) and (index(\"$T1\") < index(\"$T4\"))")|$(j "[.[].startsAt] == ([.[].startsAt]|sort)")"
+check "  nothing from other days" true "$(j "[.[].id] | (index(\"$A2\") == null) and (index(\"$T2\") == null)")"
+check "  cancelled ones included (status shown)" '"CANCELLED"' "$(j ".[] | select(.id == \"$T1\") | .status")"
+check "doctor U1 → only own" true "$(as $(tok DOCTOR $U1) $A/today >/dev/null; j "all(.[]; .doctorId == \"$U1\") and ([.[].id] | index(\"$T4\") != null)")"
+check "doctorId filter" true "$(as $REC "$A/today?doctorId=$U3" >/dev/null; j "all(.[]; .doctorId == \"$U3\") and length >= 1")"
+check "departmentId filter" true "$(as $REC "$A/today?departmentId=$CARD" >/dev/null; j 'all(.[]; .departmentCode == "CARD")')"
+check "bad departmentId → 400" 400 "$(as $REC "$A/today?departmentId=nope")"
+
+echo "Internal API"
+redis_flush_rl
+SVC=http://localhost:3004
+svc() { # svc <nokey|key> <url> → status, body in $D/body
+  local out
+  out=$($DC exec -T appointment-service node -e '
+    const [mode, url] = process.argv.slice(1);
+    const headers = mode === "key" ? { "x-internal-key": process.env.INTERNAL_API_KEY } : {};
+    fetch(url, { headers }).then(async (r) => process.stdout.write(r.status + "\n" + (await r.text())));
+  ' "$1" "$2")
+  echo "$out" | tail -n +2 > $D/body
+  echo "$out" | head -1
+}
+check "without the key → 401" 401 "$(svc nokey "$SVC/internal/appointments/$T4")"
+check "not routed by the gateway → 404" 404 "$(as_admin "$API/internal/appointments/$T4")"
+check "with the key → 200" "200|\"SCHEDULED\"|\"$U1\"|\"$P2\"" "$(svc key "$SVC/internal/appointments/$T4")|$(j .status)|$(j .doctorId)|$(j .patientId)"
+check "unknown → 404" 404 "$(svc key "$SVC/internal/appointments/$(cat /proc/sys/kernel/random/uuid)")"
 
 echo "Staff service down"
 $DC stop staff-service >/dev/null 2>&1

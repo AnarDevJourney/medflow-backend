@@ -6,10 +6,11 @@ import { AvailabilityService } from './availability.service';
 import { PatientClient } from './clients/patient.client';
 import { StaffClient } from './clients/staff.client';
 import { Appointment } from './entities/appointment.entity';
+import { InternalAppointmentsController } from './internal-appointments.controller';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Appointment])],
-  controllers: [AppointmentsController],
+  controllers: [AppointmentsController, InternalAppointmentsController],
   providers: [
     AppointmentsService,
     AvailabilityService,
