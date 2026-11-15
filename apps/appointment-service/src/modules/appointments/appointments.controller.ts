@@ -13,6 +13,8 @@ import { CurrentUser, RequirePermission } from '@medflow/common';
 import type { CurrentUserData } from '@medflow/common';
 import { AppointmentsService } from './appointments.service';
 import { AvailabilityService } from './availability.service';
+import { CalendarService } from './calendar.service';
+import { CalendarQueryDto } from './dto/calendar-query.dto';
 import { AvailabilityQueryDto } from './dto/availability-query.dto';
 import {
   CancelAppointmentDto,
@@ -31,6 +33,7 @@ export class AppointmentsController {
   constructor(
     private readonly appointments: AppointmentsService,
     private readonly availabilityService: AvailabilityService,
+    private readonly calendarService: CalendarService,
   ) {}
 
   // Fixed paths before :id, so they are not taken for an appointment id
@@ -38,6 +41,12 @@ export class AppointmentsController {
   @RequirePermission('appointments.availability')
   availability(@Query() query: AvailabilityQueryDto) {
     return this.availabilityService.availability(query);
+  }
+
+  @Get('calendar')
+  @RequirePermission('appointments.read')
+  calendar(@Query() query: CalendarQueryDto) {
+    return this.calendarService.calendar(query);
   }
 
   @Get('today')

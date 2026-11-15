@@ -309,9 +309,28 @@ check "not routed by the gateway → 404" 404 "$(as_admin "$API/internal/appoint
 check "with the key → 200" "200|\"SCHEDULED\"|\"$U1\"|\"$P2\"" "$(svc key "$SVC/internal/appointments/$T4")|$(j .status)|$(j .doctorId)|$(j .patientId)"
 check "unknown → 404" 404 "$(svc key "$SVC/internal/appointments/$(cat /proc/sys/kernel/random/uuid)")"
 
+echo "Calendar"
+redis_flush_rl
+CAL=$A/calendar
+check "accountant → 403" 403 "$(as $ACC "$CAL?from=$D2&to=$D3")"
+check "doctor (read) → 200" 200 "$(as $(tok DOCTOR $U1) "$CAL?from=$D2&to=$D3&doctorId=$U1")"
+check "U1, day +2..+3 → one doctor, two days" '200|1|2|"09:00"|30' "$(as $REC "$CAL?from=$D2&to=$D3&doctorId=$U1")|$(j '.doctors|length')|$(j '.doctors[0].days|length')|$(j '.doctors[0].days[0].start')|$(j '.doctors[0].days[0].slotMinutes')"
+check "  appointments of U1 only, in the range, time order" true "$(j "all(.appointments[]; .doctorId == \"$U1\") and ([.appointments[].startsAt] == ([.appointments[].startsAt]|sort)) and (.appointments|length) >= 2")"
+check "  cancelled ones hidden by default" true "$(j "all(.appointments[]; .status != \"CANCELLED\") and ([.appointments[].id] | index(\"$A1\") == null)")"
+check "  includeCancelled=true shows them" '"CANCELLED"' "$(as $REC "$CAL?from=$D2&to=$D3&doctorId=$U1&includeCancelled=true" >/dev/null; j ".appointments[] | select(.id == \"$A1\") | .status")"
+check "vacation day → reason" '"VACATION"' "$(as $REC "$CAL?from=$(day 5)&to=$(day 5)&doctorId=$U1" >/dev/null; j '.doctors[0].days[0].reason')"
+check "department CARD → U1 + U3, not U2 (no department)" "true|false" "$(as $REC "$CAL?from=$D2&to=$D2&departmentId=$CARD" >/dev/null; j "([.doctors[].userId] | index(\"$U1\") != null) and ([.doctors[].userId] | index(\"$U3\") != null)")|$(j "[.doctors[].userId] | index(\"$U2\") != null")"
+check "  appointments of the department only" true "$(j 'all(.appointments[]; .departmentCode == "CARD")')"
+check "a week (7 days) → 200" 200 "$(as $REC "$CAL?from=$D2&to=$(day 8)&doctorId=$U1")"
+check "15 days → 400" 400 "$(as $REC "$CAL?from=$D2&to=$(day 16)")"
+check "to before from → 400" 400 "$(as $REC "$CAL?from=$D3&to=$D2")"
+check "missing to → 400" 400 "$(as $REC "$CAL?from=$D2")"
+check "bad includeCancelled → 400" 400 "$(as $REC "$CAL?from=$D2&to=$D2&includeCancelled=maybe")"
+
 echo "Staff service down"
 $DC stop staff-service >/dev/null 2>&1
 check "availability → 503 naming the service" '503|"SERVICE_UNAVAILABLE"|"staff-service"' "$(as $REC "$AV?doctorId=$U1&date=$D3")|$(j .error.code)|$(j .error.details.service)"
+check "calendar → 503" 503 "$(as $REC "$A/calendar?from=$D3&to=$D3")"
 check "booking → 503, nothing saved" "503|0" "$(book $REC "$(body $P2 $U1 $(at $D3 09:00))")|$(aq "select count(*) from appointments where doctor_id='$U1' and starts_at='$(at $D3 09:00)'")"
 $DC start staff-service >/dev/null 2>&1
 for _ in $(seq 1 60); do [ "$($DC ps staff-service --format '{{.Health}}')" = healthy ] && break; sleep 1; done

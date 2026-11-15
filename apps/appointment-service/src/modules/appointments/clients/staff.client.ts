@@ -24,6 +24,26 @@ export interface NotWorkingDay {
 
 export type DoctorDay = WorkingDay | NotWorkingDay;
 
+// staff-service GET /internal/doctors/days — many doctors × many days
+export type RangeDay =
+  | {
+      date: string;
+      working: true;
+      start: string;
+      end: string;
+      slotMinutes: number;
+    }
+  | { date: string; working: false; reason: string };
+
+export interface DoctorDays {
+  userId: string;
+  doctorName: string;
+  departmentId: string | null;
+  departmentName: string | null;
+  departmentCode: string | null;
+  days: RangeDay[];
+}
+
 // staff-service internal API: one day of a doctor (hours, slot length,
 // time off). Sync on purpose — the desk needs the answer now (DOC 5.1).
 @Injectable()
@@ -45,6 +65,26 @@ export class StaffClient {
         .replace(/\/+$/, ''),
       key: config.getOrThrow<string>('INTERNAL_API_KEY'),
     };
+  }
+
+  // Every doctor (not deactivated) of the department / the one doctor,
+  // with each day of the range
+  async doctorDays(query: {
+    from: string;
+    to: string;
+    departmentId?: string;
+    doctorId?: string;
+  }): Promise<DoctorDays[]> {
+    const params = new URLSearchParams({ from: query.from, to: query.to });
+    if (query.departmentId) params.set('departmentId', query.departmentId);
+    if (query.doctorId) params.set('doctorId', query.doctorId);
+    return (
+      (await internalGet<DoctorDays[]>(
+        this.logger,
+        this.service,
+        `/internal/doctors/days?${params.toString()}`,
+      )) ?? []
+    );
   }
 
   // null = no staff profile with this user id

@@ -1,6 +1,6 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThanOrEqual, MoreThanOrEqual, Repository } from 'typeorm';
+import { In, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm';
 import { AppException, ErrorCode, Role } from '@medflow/common';
 import {
   StaffMember,
@@ -34,6 +34,35 @@ export interface NotWorkingDay {
 
 export type DoctorDay = WorkingDay | NotWorkingDay;
 
+// One day in a range answer: the doctor's name / department are given once
+export type RangeDay =
+  | {
+      date: string;
+      working: true;
+      start: string;
+      end: string;
+      slotMinutes: number;
+    }
+  | { date: string; working: false; reason: NotWorkingReason };
+
+export interface DoctorDays {
+  userId: string;
+  doctorName: string;
+  departmentId: string | null;
+  departmentName: string | null;
+  departmentCode: string | null;
+  days: RangeDay[];
+}
+
+// Longest range the calendar may ask for in one call
+export const MAX_RANGE_DAYS = 31;
+
+const addDays = (date: string, n: number): string => {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+
 // ISO weekday of a calendar day: 1 = Monday … 7 = Sunday. Read as UTC so
 // the server's time zone never shifts the day.
 export const isoWeekday = (date: string): number =>
@@ -52,6 +81,89 @@ export class DoctorDayService {
     @InjectRepository(DoctorSchedule)
     private readonly schedules: Repository<DoctorSchedule>,
   ) {}
+
+  // Many doctors × many days in three queries (appointment calendar): the
+  // same rules as day(), for every doctor who is not deactivated, by name
+  async days(query: {
+    from: string;
+    to: string;
+    departmentId?: string;
+    doctorId?: string;
+  }): Promise<DoctorDays[]> {
+    const dates: string[] = [];
+    for (let d = query.from; d <= query.to; d = addDays(d, 1)) {
+      dates.push(d);
+      if (dates.length > MAX_RANGE_DAYS) {
+        throw new AppException(
+          HttpStatus.BAD_REQUEST,
+          ErrorCode.BAD_REQUEST,
+          `At most ${MAX_RANGE_DAYS} days at once`,
+        );
+      }
+    }
+    if (dates.length === 0) {
+      throw new AppException(
+        HttpStatus.BAD_REQUEST,
+        ErrorCode.BAD_REQUEST,
+        'to must not be before from',
+      );
+    }
+
+    const doctors = await this.staff.find({
+      where: {
+        role: Role.DOCTOR,
+        status: Not(StaffStatus.DEACTIVATED),
+        ...(query.departmentId ? { departmentId: query.departmentId } : {}),
+        ...(query.doctorId ? { userId: query.doctorId } : {}),
+      },
+      relations: { department: true },
+      order: { lastName: 'ASC', firstName: 'ASC' },
+    });
+    if (doctors.length === 0) return [];
+    const ids = doctors.map((d) => d.id);
+    const [weeks, leaves] = await Promise.all([
+      this.schedules.find({
+        where: { staffMemberId: In(ids), isActive: true },
+      }),
+      this.timeOff.find({
+        where: {
+          staffMemberId: In(ids),
+          startDate: LessThanOrEqual(query.to),
+          endDate: MoreThanOrEqual(query.from),
+        },
+        order: { startDate: 'ASC' },
+      }),
+    ]);
+
+    return doctors.map((member) => ({
+      userId: member.userId,
+      doctorName: `${member.firstName} ${member.lastName}`,
+      departmentId: member.department?.id ?? null,
+      departmentName: member.department?.name ?? null,
+      departmentCode: member.department?.code ?? null,
+      days: dates.map((date): RangeDay => {
+        const leave = leaves.find(
+          (l) =>
+            l.staffMemberId === member.id &&
+            l.startDate <= date &&
+            l.endDate >= date,
+        );
+        if (leave) return { date, working: false, reason: leave.type };
+        const slot = weeks.find(
+          (w) =>
+            w.staffMemberId === member.id && w.dayOfWeek === isoWeekday(date),
+        );
+        if (!slot) return { date, working: false, reason: 'NOT_SCHEDULED' };
+        return {
+          date,
+          working: true,
+          start: toHHmm(slot.startTime),
+          end: toHHmm(slot.endTime),
+          slotMinutes: slot.slotMinutes,
+        };
+      }),
+    }));
+  }
 
   async day(userId: string, date = clinicToday()): Promise<DoctorDay> {
     const member = await this.staff.findOne({
