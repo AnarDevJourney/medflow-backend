@@ -21,6 +21,28 @@ type RotateResult =
   | { kind: 'rotated'; user: User; tokens: IssuedTokens }
   | { kind: 'reused'; userId: string; familyId: string };
 
+// A token rotated this recently and presented again is a race, not a theft:
+// two tabs (or a request + the socket) refreshed with the same cookie at
+// the same moment. The loser gets 409 ALREADY_REFRESHED and simply retries
+// with the cookie the winner received; nothing is revoked. Older replays
+// still kill the family (DOC 3.4).
+export const REFRESH_GRACE_MS = 30_000;
+export const ALREADY_REFRESHED = 'ALREADY_REFRESHED';
+
+const alreadyRefreshed = () =>
+  new AppException(
+    HttpStatus.CONFLICT,
+    ErrorCode.CONFLICT,
+    'The session was just refreshed by another request',
+    { reason: ALREADY_REFRESHED },
+  );
+
+// The race answer must leave the winner's fresh cookies alone
+export const isAlreadyRefreshed = (error: unknown): boolean =>
+  error instanceof AppException &&
+  (error.getResponse() as { details?: { reason?: string } }).details?.reason ===
+    ALREADY_REFRESHED;
+
 const sessionExpired = () =>
   new AppException(
     HttpStatus.UNAUTHORIZED,
@@ -74,7 +96,8 @@ export class SessionsService {
   }
 
   // Each refresh token works exactly once. Presenting a rotated (revoked)
-  // token again means it was stolen: the whole family dies (DOC 3.4).
+  // token again means it was stolen: the whole family dies (DOC 3.4) —
+  // unless it was rotated within REFRESH_GRACE_MS (a refresh race).
   async rotate(
     rawRefreshToken: string | undefined,
     meta: RequestMeta,
@@ -92,6 +115,20 @@ export class SessionsService {
         if (!current) throw sessionExpired();
         // Rotated already (replaced_by set) → someone replays an old token.
         // Revoked without a successor (logout, family already killed) → just 401.
+        if (
+          current.revokedAt &&
+          current.replacedBy &&
+          Date.now() - current.revokedAt.getTime() <= REFRESH_GRACE_MS
+        ) {
+          // The session ended meanwhile (logout of the successor) → plain 401
+          const successor = await em.findOneBy(RefreshToken, {
+            id: current.replacedBy,
+          });
+          if (!successor || (successor.revokedAt && !successor.replacedBy)) {
+            throw sessionExpired();
+          }
+          throw alreadyRefreshed();
+        }
         if (current.revokedAt && current.replacedBy) {
           return {
             kind: 'reused',

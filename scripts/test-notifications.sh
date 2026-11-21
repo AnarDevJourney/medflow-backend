@@ -63,6 +63,8 @@ yes_no "  … initial unread count 0" "$(waitfor 3 1 ev $D/l1 notification:count
 
 echo "== Real event: refresh-token reuse → live notification, old socket closed"
 check "refresh (rotates)" 200 $(code -b $D/d.jar -c $D/d.jar -X POST $G/auth/refresh)
+# Replays within 30 s are a refresh race (409); a theft is an older replay
+docker compose exec -T postgres psql -U medflow -d auth_db -tAc "update refresh_tokens set revoked_at = now() - interval '1 minute' where token_hash = encode(sha256('$R1'::bytea), 'hex')" >/dev/null
 check "replay the old refresh token → reuse" 401 $(code -H "cookie: refresh_token=$R1" -X POST $G/auth/refresh)
 check "notification pushed live (≤ 8 s)" 1 $(waitfor 8 1 ev $D/l1 notification)
 yes_no "  … SESSION_REVOKED, urgent" "$(last $D/l1 notification | grep '"type":"SESSION_REVOKED"' | grep '"isUrgent":true')" "$(cat $D/l1)"

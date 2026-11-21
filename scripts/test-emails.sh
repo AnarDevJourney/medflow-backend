@@ -85,6 +85,8 @@ curl -s "$MAILPIT/message/$(mail_id $E_MAIL changed)" >$D/mail
 yes_no "  … says 'changed' (not reset)" "$(grep 'account was changed on' $D/mail)" "$(grep -o '"Text":"[^"]*' $D/mail)"
 R1=$(tok $D/n.jar refresh_token)
 check "refresh (rotates)" 200 $(code -b $D/n.jar -c $D/n.jar -X POST $G/auth/refresh)
+# Replays within 30 s are a refresh race (409); a theft is an older replay
+docker compose exec -T postgres psql -U medflow -d auth_db -tAc "update refresh_tokens set revoked_at = now() - interval '1 minute' where token_hash = encode(sha256('$R1'::bytea), 'hex')" >/dev/null
 check "old refresh replayed → reuse" 401 $(code -H "cookie: refresh_token=$R1" -X POST $G/auth/refresh)
 check "session-revoked email (≤ 10 s)" 1 "$(waitfor 10 1 mailcount $E_MAIL signed)"
 check "  … payload now carries the email" "$E_MAIL" "$(q auth_db "select payload->'payload'->>'email' from outbox_events where aggregate_id='$U1' and event_type='user.session_revoked' order by occurred_at desc limit 1")"

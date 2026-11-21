@@ -29,10 +29,28 @@ check "me" 200 $(code -b $D/a.jar $G/auth/me)
 check "me without cookie" 401 $(code $G/auth/me)
 check "garbage token" 401 $(code -H 'cookie: access_token=abc.def.ghi' $G/auth/me)
 
+echo "== Refresh race (two tabs / request + socket refresh with one cookie)"
+RACE_R=$(tok $D/a.jar refresh_token)
+( curl -s -o $D/r1 -D $D/h1 -w '%{http_code}' -H "cookie: refresh_token=$RACE_R" -X POST $G/auth/refresh > $D/c1 ) &
+( curl -s -o $D/r2 -D $D/h2 -w '%{http_code}' -H "cookie: refresh_token=$RACE_R" -X POST $G/auth/refresh > $D/c2 ) &
+wait
+check "parallel refreshes → one 200, one 409" "200 409" "$(cat $D/c1 $D/c2 | fold -w3 | sort | tr '\n' ' ' | sed 's/ $//')"
+LOSER=$([ "$(cat $D/c1)" = 409 ] && echo 1 || echo 2)
+check "  the loser says ALREADY_REFRESHED" '"ALREADY_REFRESHED"' "$(jq -c '.error.details.reason' $D/r$LOSER)"
+check "  the loser does not clear the cookies" 0 "$(grep -ci '^set-cookie' $D/h$LOSER)"
+check "  nothing revoked, no session_revoked event" 0 $(psql "select count(*) from outbox_events where event_type='user.session_revoked' and occurred_at > '$START'")
+WIN=$([ "$LOSER" = 1 ] && echo 2 || echo 1)
+WIN_R=$(grep -i '^set-cookie: refresh_token=' $D/h$WIN | sed 's/^[^=]*=//; s/;.*//')
+check "  the winner's new refresh token works" 200 $(code -H "cookie: refresh_token=$WIN_R" -c $D/a.jar -X POST $G/auth/refresh)
+check "  same old token again within 30 s → still 409, still no revoke" "409|0" "$(code -H "cookie: refresh_token=$RACE_R" -X POST $G/auth/refresh)|$(psql "select count(*) from outbox_events where event_type='user.session_revoked' and occurred_at > '$START'")"
+check "  me with the current cookies" 200 $(code -b $D/a.jar $G/auth/me)
+
 echo "== Refresh rotation + reuse detection"
 OLD_R=$(tok $D/a.jar refresh_token)
 check "refresh" 200 $(code -b $D/a.jar -c $D/a.jar -X POST $G/auth/refresh)
-check "old refresh replayed → reuse" 401 $(code -H "cookie: refresh_token=$OLD_R" -X POST $G/auth/refresh)
+# A replay later than the 30 s grace window is a theft: age the rotation
+psql "update refresh_tokens set revoked_at = now() - interval '1 minute' where token_hash = encode(sha256('$OLD_R'::bytea), 'hex')" >/dev/null
+check "old refresh replayed after 30 s → reuse" 401 $(code -H "cookie: refresh_token=$OLD_R" -X POST $G/auth/refresh)
 check "new refresh of the family dead" 401 $(code -b $D/a.jar -X POST $G/auth/refresh)
 check "access from before reuse dead" 401 $(code -b $D/a.jar $G/auth/me)
 check "only one session_revoked event" 1 $(psql "select count(*) from outbox_events where event_type='user.session_revoked' and occurred_at > '$START'")

@@ -22,6 +22,7 @@ import type { CurrentUserData } from '@medflow/common';
 import { getRequestMeta } from '../../common/request-meta';
 import { AuthConfigService } from '../../config/auth-config.service';
 import { clearAuthCookies, setAuthCookies } from '../sessions/auth-cookies';
+import { isAlreadyRefreshed } from '../sessions/sessions.service';
 import { AuthService } from './auth.service';
 import { UpdateProfileDto } from '../users/dto/update-user.dto';
 import {
@@ -68,7 +69,9 @@ export class AuthController {
       setAuthCookies(res, tokens, this.config);
       return { user };
     } catch (error) {
-      clearAuthCookies(res, this.config); // dead session → drop the cookies
+      // dead session → drop the cookies; a lost refresh race keeps them
+      // (the browser already holds the winner's new ones)
+      if (!isAlreadyRefreshed(error)) clearAuthCookies(res, this.config);
       throw error;
     }
   }
