@@ -108,6 +108,8 @@ export const PERMISSIONS = {
   // medical-record-service — history and lab
   'records.read': { group: 'records', defaultRoles: [DOCTOR, NURSE] },
   'records.stats': { group: 'records', defaultRoles: [ADMIN] },
+  // the diagnosis catalogue: activate codes, local names (never new codes)
+  'icd10.manage': { group: 'records', defaultRoles: [ADMIN] },
   'lab.process': { group: 'lab', defaultRoles: [NURSE] },
   'lab.stats': { group: 'lab', defaultRoles: [NURSE] },
 

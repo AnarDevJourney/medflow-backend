@@ -6,6 +6,7 @@ import { DatabaseModule } from '@medflow/database';
 import { KafkaModule, OutboxModule } from '@medflow/kafka';
 import { envValidationSchema } from './config/env.validation';
 import { EncountersModule } from './modules/encounters/encounters.module';
+import { Icd10Module } from './modules/icd10/icd10.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { EncountersModule } from './modules/encounters/encounters.module';
     OutboxModule.forRoot({ topic: Topics.RECORD }),
     HealthModule,
     EncountersModule,
+    Icd10Module,
   ],
 })
 export class AppModule {}

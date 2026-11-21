@@ -48,7 +48,7 @@ NURSE=$(node scripts/lib/sign-token.mjs "$SECRET" "$(cat /proc/sys/kernel/random
 ORIGINAL_DOCTOR=$(doctor_list)
 
 echo "Catalog seed"
-check "52 permissions in the catalog table" 52 "$(cq "select count(*) from permissions")"
+check "53 permissions in the catalog table" 53 "$(cq "select count(*) from permissions")"
 check "ADMIN defaults (DOC 4.2)" 'true|true|false' "$(cq "select bool_or(permission='users.invite')||'|'||bool_or(permission='permissions.manage')||'|'||bool_or(permission='encounters.manage') from role_permissions where role='ADMIN'")"
 check "every role cached in Redis" 5 "$(rc --scan --pattern 'permissions:role:*' | grep -vc ':version')"
 
@@ -70,7 +70,7 @@ check "spoofed x-user-permissions ignored" 403 "$(as $DOC $API/users -H 'x-user-
 
 echo "Matrix"
 check "admin GET matrix → 200" 200 "$(as_admin $P)"
-check "  52 permissions, 11 groups, 5 roles" '52|11|5' "$(j '.permissions|length')|$(j '.groups|length')|$(j '.roles|keys|length')"
+check "  53 permissions, 11 groups, 5 roles" '53|11|5' "$(j '.permissions|length')|$(j '.groups|length')|$(j '.roles|keys|length')"
 check "  ADMIN locks" '["permissions.read","permissions.manage"]' "$(j .locked.ADMIN)"
 check "  DOCTOR list = DB" "$(doctor_list)" "$(j '.roles.DOCTOR|sort')"
 check "doctor GET matrix → 403" 403 "$(as $DOC $P)"

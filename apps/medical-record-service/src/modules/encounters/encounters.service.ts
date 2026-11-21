@@ -1,11 +1,6 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  DataSource,
-  EntityManager,
-  QueryFailedError,
-  Repository,
-} from 'typeorm';
+import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { AppException, ErrorCode } from '@medflow/common';
 import type { CurrentUserData } from '@medflow/common';
 import { RecordEvents } from '@medflow/contracts';
@@ -13,13 +8,17 @@ import { OutboxService } from '@medflow/kafka';
 import { AppointmentClient } from '../../clients/appointment.client';
 import { StartEncounterDto, UpdateEncounterDto } from './dto/encounter.dto';
 import {
-  EncounterResponse,
+  AGGREGATE,
+  assertDoctor,
+  lockedOpenOwn,
+  notFound,
+} from './encounter-access';
+import { EncounterDetailService } from './encounter-detail.service';
+import {
+  EncounterDetailResponse,
   toEncounterPayload,
-  toEncounterResponse,
 } from './encounter.mapper';
 import { Encounter, EncounterStatus } from './entities/encounter.entity';
-
-const AGGREGATE = 'ENCOUNTER';
 
 const NOTE_FIELDS = [
   'chiefComplaint',
@@ -27,13 +26,6 @@ const NOTE_FIELDS = [
   'treatmentPlan',
   'followUpInDays',
 ] as const;
-
-const notFound = () =>
-  new AppException(
-    HttpStatus.NOT_FOUND,
-    ErrorCode.NOT_FOUND,
-    'Visit not found',
-  );
 
 // 23505 on uq_encounters_appointment: a parallel "Start visit" won
 function isDuplicateStart(error: unknown): boolean {
@@ -54,6 +46,7 @@ export class EncountersService {
     private readonly encounters: Repository<Encounter>,
     private readonly outbox: OutboxService,
     private readonly appointmentsApi: AppointmentClient,
+    private readonly detail: EncounterDetailService,
   ) {}
 
   // DOC 6.3: the appointment must be CHECKED_IN and the caller its doctor.
@@ -62,13 +55,13 @@ export class EncountersService {
   async start(
     dto: StartEncounterDto,
     actor: CurrentUserData,
-  ): Promise<{ encounter: EncounterResponse; created: boolean }> {
+  ): Promise<{ encounter: EncounterDetailResponse; created: boolean }> {
     const existing = await this.encounters.findOneBy({
       appointmentId: dto.appointmentId,
     });
     if (existing) {
       assertDoctor(existing.doctorId, actor, 'open this visit');
-      return { encounter: toEncounterResponse(existing), created: false };
+      return { encounter: await this.detail.of(existing), created: false };
     }
 
     const appointment = await this.appointmentsApi.findOne(dto.appointmentId);
@@ -117,20 +110,20 @@ export class EncountersService {
         });
         return row;
       });
-      return { encounter: toEncounterResponse(saved), created: true };
+      return { encounter: await this.detail.of(saved), created: true };
     } catch (error) {
       if (!isDuplicateStart(error)) throw error;
       const winner = await this.encounters.findOneByOrFail({
         appointmentId: dto.appointmentId,
       });
-      return { encounter: toEncounterResponse(winner), created: false };
+      return { encounter: await this.detail.of(winner), created: false };
     }
   }
 
-  async findOne(id: string): Promise<EncounterResponse> {
+  async findOne(id: string): Promise<EncounterDetailResponse> {
     const row = await this.encounters.findOneBy({ id });
     if (!row) throw notFound();
-    return toEncounterResponse(row);
+    return this.detail.of(row);
   }
 
   // The visit's own doctor, while it is open. Only changed fields are
@@ -139,8 +132,8 @@ export class EncountersService {
     id: string,
     dto: UpdateEncounterDto,
     actor: CurrentUserData,
-  ): Promise<EncounterResponse> {
-    const saved = await this.dataSource.transaction(async (em) => {
+  ): Promise<EncounterDetailResponse> {
+    return this.dataSource.transaction(async (em) => {
       const row = await lockedOpenOwn(em, id, actor, 'edit');
       let changed = false;
       for (const field of NOTE_FIELDS) {
@@ -149,15 +142,17 @@ export class EncountersService {
         (row as unknown as Record<string, unknown>)[field] = value;
         changed = true;
       }
-      return changed ? em.save(row) : row;
+      return this.detail.of(changed ? await em.save(row) : row, em);
     });
-    return toEncounterResponse(saved);
   }
 
   // DOC 6.3: a chief complaint and exactly one PRIMARY diagnosis (the
   // partial unique index allows at most one). Closed = read-only;
   // encounter.closed → appointment COMPLETED, billing DRAFT invoice.
-  async close(id: string, actor: CurrentUserData): Promise<EncounterResponse> {
+  async close(
+    id: string,
+    actor: CurrentUserData,
+  ): Promise<EncounterDetailResponse> {
     const saved = await this.dataSource.transaction(async (em) => {
       const row = await lockedOpenOwn(em, id, actor, 'close');
       if (!row.chiefComplaint) {
@@ -205,22 +200,7 @@ export class EncountersService {
       return updated;
     });
     this.logger.log(`Visit ${saved.id} closed`);
-    return toEncounterResponse(saved);
-  }
-}
-
-// Only the visit's doctor writes in it (DOC 4: "own DOCTOR")
-function assertDoctor(
-  doctorId: string,
-  actor: CurrentUserData,
-  action: string,
-): void {
-  if (doctorId !== actor.id) {
-    throw new AppException(
-      HttpStatus.FORBIDDEN,
-      ErrorCode.FORBIDDEN,
-      `Only the appointment's doctor can ${action}`,
-    );
+    return this.detail.of(saved);
   }
 }
 
@@ -229,33 +209,5 @@ const closeRule = (msg: string, reason: string, field: string) =>
     HttpStatus.UNPROCESSABLE_ENTITY,
     ErrorCode.BUSINESS_RULE,
     msg,
-    {
-      reason,
-      field,
-    },
+    { reason, field },
   );
-
-// The visit, locked until the transaction ends; must be open and the
-// caller's own
-async function lockedOpenOwn(
-  em: EntityManager,
-  id: string,
-  actor: CurrentUserData,
-  action: string,
-): Promise<Encounter> {
-  const row = await em.findOne(Encounter, {
-    where: { id },
-    lock: { mode: 'pessimistic_write' },
-  });
-  if (!row) throw notFound();
-  assertDoctor(row.doctorId, actor, `${action} this visit`);
-  if (row.status !== EncounterStatus.OPEN) {
-    throw new AppException(
-      HttpStatus.CONFLICT,
-      ErrorCode.INVALID_STATUS,
-      `Cannot ${action} a visit that is ${row.status}`,
-      { status: row.status },
-    );
-  }
-  return row;
-}
