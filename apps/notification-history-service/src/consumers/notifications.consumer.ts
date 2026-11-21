@@ -115,9 +115,16 @@ export class NotificationsConsumer extends BaseBatchConsumer<
       ...new Set(saved.map((row) => row.recipient_id)),
     ]);
 
-    // Live calendars: the clinic days touched by fresh appointment events
+    // Live calendars: the clinic days touched by fresh appointment events,
+    // and by visits starting / closing (the appointment's status follows)
     const days = new Set<string>();
     for (const event of events) {
+      if (event.eventType.startsWith('encounter.')) {
+        if (Date.now() - Date.parse(event.occurredAt) <= this.pushMaxAgeMs) {
+          days.add(CLINIC_DAY.format(new Date(event.occurredAt)));
+        }
+        continue;
+      }
       if (!event.eventType.startsWith('appointment.')) continue;
       if (Date.now() - Date.parse(event.occurredAt) > this.pushMaxAgeMs)
         continue;

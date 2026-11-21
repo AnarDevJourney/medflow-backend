@@ -18,6 +18,7 @@ export * from './guards/internal-key.guard';
 export * from './guards/permission.guard';
 export * from './health/health-checks.registry';
 export * from './health/health.module';
+export * from './http/internal-http';
 export * from './interceptors/transform.interceptor';
 export * from './interfaces/current-user.interface';
 export * from './middleware/request-id.middleware';

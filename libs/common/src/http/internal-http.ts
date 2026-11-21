@@ -1,16 +1,14 @@
 import { HttpStatus, Logger } from '@nestjs/common';
-import {
-  AppException,
-  ErrorCode,
-  HEADERS,
-  requestContext,
-} from '@medflow/common';
+import { ErrorCode } from '../constants/error-codes';
+import { HEADERS } from '../constants/headers';
+import { requestContext } from '../context/request-context';
+import { AppException } from '../exceptions/app.exception';
 
 const TIMEOUT_MS = 3000;
 
 // GET <baseUrl><path> on another service's internal API (x-internal-key).
 // 404 → null; unreachable, timeout or any other non-2xx → 503 naming the
-// service, so the desk sees "try again" instead of a 500.
+// service, so the user sees "try again" instead of a 500.
 export async function internalGet<T>(
   logger: Logger,
   service: { name: string; label: string; baseUrl: string; key: string },

@@ -163,6 +163,12 @@ services:
       <<: *common-env
       PORT: 3005
       DATABASE_URL: postgres://${POSTGRES_USER:-medflow}:${POSTGRES_PASSWORD:-secret}@postgres:5432/record_db
+      # Start visit: the appointment (status, doctor, snapshots)
+      APPOINTMENT_SERVICE_URL: http://appointment-service:3004
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy } # outbox poller (BullMQ)
+      kafka-init: { condition: service_completed_successfully } # publishes record.events
 
   billing-service:
     <<: *service

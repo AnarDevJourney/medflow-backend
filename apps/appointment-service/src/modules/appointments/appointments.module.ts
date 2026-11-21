@@ -11,6 +11,7 @@ import { Appointment } from './entities/appointment.entity';
 import { InternalAppointmentsController } from './internal-appointments.controller';
 import { AppointmentJobsService } from './jobs/appointment-jobs.service';
 import { InternalJobsController } from './jobs/internal-jobs.controller';
+import { EncounterSyncService } from './encounter-sync.service';
 import { PatientSyncService } from './patient-sync.service';
 
 @Module({
@@ -27,9 +28,10 @@ import { PatientSyncService } from './patient-sync.service';
     AppointmentStatsService,
     AppointmentJobsService,
     PatientSyncService,
+    EncounterSyncService,
     StaffClient,
     PatientClient,
   ],
-  exports: [PatientSyncService],
+  exports: [PatientSyncService, EncounterSyncService],
 })
 export class AppointmentsModule {}

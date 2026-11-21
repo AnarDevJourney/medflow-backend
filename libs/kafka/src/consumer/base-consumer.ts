@@ -54,7 +54,10 @@ export const RETRY_DELAYS_MS = [1000, 5000, 15000];
 // → skipped), 3 retries (1 s, 5 s, 15 s), then dead-letter.events. The
 // offset is committed only after that, so nothing is lost on a crash —
 // it is redelivered and the idempotency check catches the repeat.
-// Consumer group = service name: replicas share the partitions.
+// Consumer group = service name: replicas share the partitions. A second
+// consumer in the same service (another topic) sets groupSuffix — members
+// of one group must subscribe to the same topics, or partitions of a topic
+// get assigned to a member that never reads them.
 export abstract class BaseConsumer
   implements OnApplicationBootstrap, BeforeApplicationShutdown
 {
@@ -63,6 +66,8 @@ export abstract class BaseConsumer
   // false: the handler is idempotent by itself (e.g. a unique event_id
   // column) and no processed_events row is written
   protected readonly useProcessedEvents: boolean = true;
+  // group = '<service>.<suffix>' instead of '<service>'
+  protected readonly groupSuffix?: string;
 
   @Inject(KAFKA_CLIENT) private readonly kafka: Kafka;
   @Inject(KAFKA_PRODUCER) private readonly producer: Producer;
@@ -74,7 +79,9 @@ export abstract class BaseConsumer
 
   async onApplicationBootstrap() {
     this.consumer = this.kafka.consumer({
-      groupId: this.options.serviceName,
+      groupId: this.groupSuffix
+        ? `${this.options.serviceName}.${this.groupSuffix}`
+        : this.options.serviceName,
       allowAutoTopicCreation: false,
     });
     await this.consumer.connect();

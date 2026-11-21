@@ -6,6 +6,7 @@ import { DatabaseModule } from '@medflow/database';
 import { KafkaConsumerModule, KafkaModule, OutboxModule } from '@medflow/kafka';
 import { envValidationSchema } from './config/env.validation';
 import { PatientEventsConsumer } from './consumers/patient-events.consumer';
+import { RecordEventsConsumer } from './consumers/record-events.consumer';
 import { AppointmentsModule } from './modules/appointments/appointments.module';
 
 @Module({
@@ -21,6 +22,6 @@ import { AppointmentsModule } from './modules/appointments/appointments.module';
     HealthModule,
     AppointmentsModule,
   ],
-  providers: [PatientEventsConsumer],
+  providers: [PatientEventsConsumer, RecordEventsConsumer],
 })
 export class AppModule {}

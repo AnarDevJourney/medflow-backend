@@ -4,5 +4,6 @@ export * from './events/appointment.events';
 export * from './events/auth.events';
 export * from './events/configurations.events';
 export * from './events/patient.events';
+export * from './events/record.events';
 export * from './events/staff.events';
 export * from './topics';

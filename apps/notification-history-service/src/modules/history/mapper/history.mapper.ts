@@ -11,6 +11,7 @@ import {
   NOT_IN_HISTORY,
 } from './history-template';
 import { patientTemplates } from './patient.templates';
+import { recordTemplates } from './record.templates';
 import { staffTemplates } from './staff.templates';
 
 export type NewActionHistory = Omit<ActionHistory, 'id' | 'createdAt'>;
@@ -23,6 +24,7 @@ const TEMPLATES: HistoryTemplates<HistoryEventType> = {
   ...staffTemplates,
   ...patientTemplates,
   ...appointmentTemplates,
+  ...recordTemplates,
 };
 
 const SKIPPED: ReadonlySet<string> = new Set(NOT_IN_HISTORY);

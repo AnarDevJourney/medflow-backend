@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { internalGet } from './internal-http';
+import { internalGet } from '@medflow/common';
 
 export interface PatientSummary {
   id: string;
